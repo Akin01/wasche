@@ -100,17 +100,17 @@ Adopted directly from [[Safe WhatsApp Broadcast]]:
 
 | Anti-Abuse Layer | Detection Vector | Threat Model & Risk | Mitigation Mechanism in Wasche | Technical Implementation |
 | :--- | :--- | :--- | :--- | :--- |
-| **Typing Presence** | Instantaneous Stanzas | Immediate message injection without prior presence stanzas triggers bot heuristics. | Proportional Typing Delays | $t_{\text{typing}} = \operatorname{clamp}\Big(\text{len}(\text{message}) \times \mathcal{U}(30, 50)\text{ ms},\; 1.5\text{ s},\; 8.0\text{ s}\Big)$ |
+| **Typing Presence** | Instantaneous Stanzas | Immediate message injection without prior presence stanzas triggers bot heuristics. | Proportional Typing Delays | `t_typing = clamp(len(message) * U(30..50ms), 1.5s, 8.0s)` |
 | **Chatstate Emulation** | Zero-Presence Outbound | Sending messages while appearing offline trips behavioral analysis flags. | `Chatstate::Composing` Stanzas | Sends explicit typing stanzas to WhatsApp before transmission, followed by `Chatstate::Paused`. |
-| **Inter-Message Pacing** | Rigid Periodic Intervals | Fixed timing intervals (e.g. exactly 5.00s) indicate automated cron scripts. | Bounded Jitter Delay Window | Random uniform cooldown: $t_{\text{wait}} \sim \mathcal{U}(\text{min\_delay\_secs},\; \text{max\_delay\_secs})$ (default $25\text{ s} - 90\text{ s}$). |
+| **Inter-Message Pacing** | Rigid Periodic Intervals | Fixed timing intervals (e.g. exactly 5.00s) indicate automated cron scripts. | Bounded Jitter Delay Window | Random uniform cooldown: `t_wait ~ U(min_delay, max_delay)` (default 25s–90s). |
 | **Queue Concurrency** | Concurrent Dispatches | Multiple simultaneous dispatches from a single session cause immediate rate-limit bans. | Strict Single-Flight Queue | Atomic SQLite checkout (`status = 'typing'`) ensures sequential delivery per linked account. |
 | **Content Variance** | Static Content Hashes | Identical hash across hundreds of outbound messages triggers WhatsApp spam filters. | Template Token Interpolation | Dynamic substitution of `{{name}}`, `{{phone}}`, and custom JSON payload variables per recipient. |
 | **Recipient Trust** | Recipient Spam Reports | Outbound cold messages to unknown numbers result in block/report actions. | Mutual Contact Address Book Sync | Background Peer AppState Sync (`CriticalUnblockLow`) maps and verifies existing address book contacts. |
 
 - **Dynamic Typing Presence**:
-  $$t_{\text{typing}} = \operatorname{clamp}\Big(\text{len}(\text{message}) \times \mathcal{U}(30, 50)\text{ ms},\; 1.5\text{ s},\; 8.0\text{ s}\Big)$$
+  $$t_{\text{typing}} = \text{clamp}\Big(\text{len}(\text{message}) \times \mathcal{U}(30, 50)\text{ ms},\; 1.5\text{ s},\; 8.0\text{ s}\Big)$$
 - **Bounded Inter-Recipient Jitter**:
-  $$t_{\text{wait}} \sim \mathcal{U}(\text{min\_delay\_secs},\; \text{max\_delay\_secs})$$
+  $$t_{\text{wait}} \sim \mathcal{U}(t_{\text{min}},\; t_{\text{max}})$$
 
 ---
 

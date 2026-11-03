@@ -157,9 +157,9 @@ Wasche incorporates multi-layer safeguards against automated rate-limiting:
 
 | Anti-Abuse Layer | Detection Vector | Mitigation Mechanism | Implementation Formula |
 | :--- | :--- | :--- | :--- |
-| **Typing Presence** | Instantaneous stanzas | Proportional Typing Delays | $t_{\text{typing}} = \operatorname{clamp}\Big(\text{len}(\text{msg}) \times \mathcal{U}(30, 50)\text{ ms},\; 1.5\text{ s},\; 8.0\text{ s}\Big)$ |
+| **Typing Presence** | Instantaneous stanzas | Proportional Typing Delays | `t_typing = clamp(len(msg) * U(30..50ms), 1.5s, 8.0s)` |
 | **Chatstate Emulation** | Zero-presence outbound | `Chatstate::Composing` Stanzas | Sends explicit typing stanzas followed by paused state. |
-| **Inter-Message Pacing**| Rigid periodic intervals | Bounded Jitter Delay Window | Uniform random cooldown: $t_{\text{wait}} \sim \mathcal{U}(\text{min\_delay},\; \text{max\_delay})$ (25–90s default). |
+| **Inter-Message Pacing**| Rigid periodic intervals | Bounded Jitter Delay Window | Uniform random cooldown: `t_wait ~ U(min_delay, max_delay)` (25s–90s default). |
 | **Queue Concurrency** | Socket collision | Strict Single-Flight Queue | Mutex-guarded atomic SQLite checkout per sending SIM card. |
 | **Content Variance** | Static content hashes | Template Token Interpolation | Dynamic substitution of `{{name}}`, `{{phone}}`, and custom variables. |
 | **Circuit Breakers** | Consecutive dispatches | 3-Strike Exponential Backoff | Quarantines accounts after consecutive protocol errors to protect reputation. |
