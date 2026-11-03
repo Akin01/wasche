@@ -1,0 +1,8 @@
+/target
+/data
+*.db
+*.db-wal
+*.db-shm
+*.old
+qr.html
+.mcp.json
