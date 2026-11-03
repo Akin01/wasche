@@ -1,43 +1,72 @@
-# Astro Starter Kit: Minimal
+# Wasche Web Dashboard
 
-```sh
-pnpm create astro@latest -- --template minimal
-```
+> Modern client-side SPA (Astro + SolidJS + Tailwind CSS) embedded directly within the Wasche Rust binary for monitoring WhatsApp campaigns, account pairing, and media editing.
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
+---
 
-## 🚀 Project Structure
+## Architecture
 
-Inside of your Astro project, you'll see the following folders and files:
+The dashboard is built on **Astro 7** with client-only **SolidJS** islands (`client:only="solid-js"`):
+
+- **Frame-0 SWR Hydration**: Active accounts hydrate synchronously from `localStorage` with zero latency before background REST calls complete.
+- **Embedded Asset Serving**: The production build (`dist/`) is embedded directly into the Rust executable at compile time via `rust-embed`, serving on `http://127.0.0.1:3030`.
+- **Real-Time Polling & Reactive Signals**: Monitored queues, typing indicators, and delivery statistics update smoothly without page reloads.
+
+---
+
+## Directory Structure
 
 ```text
-/
-├── public/
+dashboard/
 ├── src/
-│   └── pages/
-│       └── index.astro
+│   ├── components/solid/
+│   │   ├── Dashboard.tsx            # Main layout controller and view switcher
+│   │   ├── Header.tsx               # Top navigation bar with active account status
+│   │   ├── Sidebar.tsx              # Navigation rail and account indicators
+│   │   ├── CampaignsView.tsx        # Broadcast campaigns grid and status pills
+│   │   ├── CampaignDetailView.tsx   # Contacts table, template composer, and run logs
+│   │   ├── ContactsView.tsx         # Address book search and quick direct messaging
+│   │   ├── DevicesView.tsx          # Multi-account pairing and connection manager
+│   │   ├── Modals.tsx               # Photo Studio, Video Trimmer, QR pairing modals
+│   │   ├── ToastContainer.tsx       # Reactive toast notification alerts
+│   │   ├── store.ts                 # Central SolidJS reactive signals & API actions
+│   │   └── types.ts                 # Shared TypeScript interfaces and enums
+│   ├── layouts/
+│   │   └── Layout.astro             # Base HTML shell and theme fonts
+│   ├── pages/
+│   │   ├── index.astro              # Brand welcome landing page with auto-redirect
+│   │   ├── campaign.astro           # Campaigns and campaign detail view
+│   │   ├── contacts.astro           # Address book contacts route
+│   │   └── devices.astro            # Managed WhatsApp accounts route
+│   └── styles/
+│       └── global.css               # Dark theme color variables and animations
+├── public/                          # Static brand icons, logos, and wallpapers
+├── astro.config.mjs                 # Astro configuration with SolidJS integration
 └── package.json
 ```
 
-Astro looks for `.astro` or `.md` files in the `src/pages/` directory. Each page is exposed as a route based on its file name.
+---
 
-There's nothing special about `src/components/`, but that's where we like to put any Astro/React/Vue/Svelte/Preact components.
+## Development & Build Commands
 
-Any static assets, like images, can be placed in the `public/` directory.
+All commands are run from the `dashboard/` directory:
 
-## 🧞 Commands
+| Command | Description |
+| :--- | :--- |
+| `pnpm install` | Installs frontend dependencies. |
+| `pnpm dev` | Starts local Vite development server on `http://localhost:4321`. |
+| `pnpm build` | Compiles the production SPA to `dist/` (required before `cargo build`). |
+| `pnpm preview` | Serves the local `dist/` build preview. |
 
-All commands are run from the root of the project, from a terminal:
+---
 
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `pnpm install`             | Installs dependencies                            |
-| `pnpm dev`             | Starts local dev server at `localhost:4321`      |
-| `pnpm build`           | Build your production site to `./dist/`          |
-| `pnpm preview`         | Preview your build locally, before deploying     |
-| `pnpm astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `pnpm astro -- --help` | Get help using the Astro CLI                     |
+## Media Editing Studios
 
-## 👀 Want to learn more?
+1. **WhatsApp Photo Studio**: Interactive in-browser canvas editor supporting cropping, rotating, doodling with color palette, and text caption stamps.
+2. **Video Trimmer Studio**: Filmstrip scrubber with millisecond precision, keyframe capture, audio mute toggle, and automated WhatsApp 16 MB rate control enforcement.
 
-Feel free to check [our documentation](https://docs.astro.build) or jump into our [Discord server](https://astro.build/chat).
+---
+
+## License
+
+Licensed under the **Apache License, Version 2.0**.
