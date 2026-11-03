@@ -51,8 +51,7 @@ Initial production release of **Wasche**: a native Rust Model Context Protocol (
   - `resend_aborted`: Resets only canceled recipients from aborted campaigns.
 
 #### Anti-Abuse & Human Emulation Pacing
-- Dynamic typing presence emulation calculated proportionally to message length:
-  $$t_{\text{typing}} = \operatorname{clamp}\Big(\text{len}(\text{message}) \times \mathcal{U}(30, 50)\text{ ms},\; 1.5\text{ s},\; 8.0\text{ s}\Big)$$
+- Dynamic typing presence emulation calculated proportionally to message length: `t_typing = clamp(len(message) * U(30..50ms), 1.5s, 8.0s)`.
 - Inter-recipient delay jittering uniformly sampled between `min_delay_secs` and `max_delay_secs` (default 25–90s).
 - Template variable interpolation supporting `{{name}}`, `{{phone}}`, and custom JSON payload attributes.
 - 3-strike circuit breaker: quarantines an account for 10 minutes upon 3 consecutive protocol failures to protect SIM reputation.
@@ -87,10 +86,10 @@ Initial production release of **Wasche**: a native Rust Model Context Protocol (
 - **Circuit Breaker Deadlock**: Fixed issue where the 10-minute quarantine sleep re-evaluated historical error counts in SQLite, preventing operator resumption actions (`resume`, `start`, `retry_failed`) from resetting the breaker.
 - **Multi-Attachment Stanza Deduplication**: Fixed dropped photos when broadcasting bundles containing both photo and video by generating fresh, cryptographically unique stanza IDs for every attachment rather than reusing the first recipient stanza ID.
 - **Attachment Inter-Message Delay**: Introduced a 1,500ms pacing delay between multi-media stanzas to prevent WhatsApp server packet collisions.
-- **Top Action Bar Style Normalization**: Unified button styling across `Back`, `Start/Pause`, `Abort`, `Retry Failed`, and `Delete` with consistent $32\text{ px}$ heights and active scale animations.
+- **Top Action Bar Style Normalization**: Unified button styling across `Back`, `Start/Pause`, `Abort`, `Retry Failed`, and `Delete` with consistent 32px heights and active scale animations.
 - **Account Deletion JSON Parse**: Fixed `ReferenceError: data is not defined` in `store.ts` when removing accounts.
 - **Default Account Resurrection**: Removed auto-insertion of `"default"` account in `AccountManager::init()`, enabling users to maintain a clean zero-account state.
-- **QR Code Modal Polling**: Restored omitted `else if (m.type === 'qr')` branch in `Modals.tsx`, enabling automatic $30\text{ s}$ SVG QR code polling on modal open.
+- **QR Code Modal Polling**: Restored omitted `else if (m.type === 'qr')` branch in `Modals.tsx`, enabling automatic 30s SVG QR code polling on modal open.
 - **Blurry Status Glows**: Removed muddy box-shadow glow halos from `.status-dot.online` and sidebar indicators, rendering clean circular emerald dots.
 
 ---
