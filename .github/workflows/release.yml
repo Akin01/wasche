@@ -31,14 +31,6 @@ jobs:
             target: x86_64-unknown-linux-gnu
             binary_name: wasche
             npm_binary_name: wasche-linux-x64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            binary_name: wasche
-            npm_binary_name: wasche-darwin-arm64
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            binary_name: wasche
-            npm_binary_name: wasche-darwin-x64
 
     steps:
       - name: Checkout repository
@@ -99,9 +91,71 @@ jobs:
           path: dist-bin/${{ matrix.npm_binary_name }}
           if-no-files-found: error
 
+  build-macos:
+    name: Build macOS Universal Binaries (ARM64 & x86_64)
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+          cache-dependency-path: "dashboard/pnpm-lock.yaml"
+
+      - name: Build Dashboard Frontend
+        run: |
+          cd dashboard
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: macos-universal
+
+      - name: Build Apple Silicon (aarch64)
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Build Intel Mac (x86_64)
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Prepare binary artifacts
+        run: |
+          mkdir -p dist-bin
+          cp target/aarch64-apple-darwin/release/wasche dist-bin/wasche-darwin-arm64
+          cp target/x86_64-apple-darwin/release/wasche dist-bin/wasche-darwin-x64
+          chmod +x dist-bin/*
+
+      - name: Upload aarch64 binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-aarch64-apple-darwin
+          path: dist-bin/wasche-darwin-arm64
+          if-no-files-found: error
+
+      - name: Upload x86_64 binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-x86_64-apple-darwin
+          path: dist-bin/wasche-darwin-x64
+          if-no-files-found: error
+
   publish-npm:
     name: Publish MCP Package to npm Registry
-    needs: build-binaries
+    needs: [build-binaries, build-macos]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -122,6 +176,7 @@ jobs:
 
       - name: Assemble npm package bundle
         run: node scripts/assemble-npm.js npm-artifacts "${{ inputs.tag || github.ref_name }}"
+
       - name: Publish to npm registry
         run: |
           cd npm
@@ -131,7 +186,7 @@ jobs:
 
   create-github-release:
     name: Create GitHub Release
-    needs: build-binaries
+    needs: [build-binaries, build-macos]
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
     runs-on: ubuntu-latest
     steps:
