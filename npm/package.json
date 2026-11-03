@@ -1,0 +1,30 @@
+{
+  "name": "wasche",
+  "version": "0.1.0",
+  "description": "WhatsApp MCP Server & Background Scheduler Sidecar",
+  "bin": {
+    "wasche": "bin/run.js"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node bin/run.js"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "whatsapp",
+    "scheduler",
+    "broadcast",
+    "ai-agent",
+    "claude",
+    "cursor"
+  ],
+  "license": "Apache-2.0"
+}
