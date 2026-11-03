@@ -75,7 +75,7 @@ flowchart TB
 Run the server directly through npx:
 
 ```bash
-npx wasche
+npx @akin01/wasche
 ```
 
 ### 2. Configure with MCP Clients
@@ -87,7 +87,7 @@ Add Wasche to your MCP client configuration (`claude_desktop_config.json`, Curso
   "mcpServers": {
     "wasche": {
       "command": "npx",
-      "args": ["-y", "wasche"],
+      "args": ["-y", "@akin01/wasche"],
       "env": {
         "RUST_LOG": "info"
       }
@@ -102,7 +102,7 @@ Requirements: **Rust 1.88+ (2024 edition)**, **Node.js 20+**, and **pnpm 9+**.
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/your-org/wasche.git
+git clone https://github.com/Akin01/wasche.git
 cd wasche
 
 # 2. Build web dashboard frontend

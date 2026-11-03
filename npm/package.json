@@ -1,5 +1,5 @@
 {
-  "name": "wasche",
+  "name": "@akin01/wasche",
   "version": "0.1.0",
   "description": "WhatsApp MCP Server & Background Scheduler Sidecar",
   "bin": {

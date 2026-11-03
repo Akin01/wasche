@@ -2,7 +2,7 @@
 
 > Official [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server and background scheduler sidecar for WhatsApp.
 
-[![npm version](https://img.shields.io/npm/v/wasche.svg)](https://www.npmjs.com/package/wasche)
+[![npm version](https://img.shields.io/npm/v/@akin01/wasche.svg)](https://www.npmjs.com/package/@akin01/wasche)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-purple.svg)](https://modelcontextprotocol.io)
 
@@ -15,7 +15,7 @@
 Run the server directly without manual installation:
 
 ```bash
-npx wasche
+npx @akin01/wasche
 ```
 
 ---
@@ -31,7 +31,7 @@ Add to your `claude_desktop_config.json`:
   "mcpServers": {
     "wasche": {
       "command": "npx",
-      "args": ["-y", "wasche"],
+      "args": ["-y", "@akin01/wasche"],
       "env": {
         "RUST_LOG": "info"
       }
@@ -49,7 +49,7 @@ Add to your workspace `.mcp.json`:
   "mcpServers": {
     "wasche": {
       "command": "npx",
-      "args": ["-y", "wasche"],
+      "args": ["-y", "@akin01/wasche"],
       "env": {
         "RUST_LOG": "info"
       }
