@@ -16,22 +16,9 @@ permissions:
   id-token: write
 
 jobs:
-  build-binaries:
-    name: Build Native Engine (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            binary_name: wasche.exe
-            npm_binary_name: wasche-windows-x64.exe
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            binary_name: wasche
-            npm_binary_name: wasche-linux-x64
-
+  build-dashboard:
+    name: Build Embedded Dashboard SPA
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -51,8 +38,42 @@ jobs:
       - name: Build Dashboard Frontend
         run: |
           cd dashboard
-          pnpm install --frozen-lockfile
+          pnpm install
           pnpm build
+
+      - name: Upload Dashboard Dist Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-dist
+          path: dashboard/dist
+          if-no-files-found: error
+
+  build-binaries:
+    name: Build Native Engine (${{ matrix.target }})
+    needs: build-dashboard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_name: wasche.exe
+            npm_binary_name: wasche-windows-x64.exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary_name: wasche
+            npm_binary_name: wasche-linux-x64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Prebuilt Dashboard Dist
+        uses: actions/download-artifact@v4
+        with:
+          name: dashboard-dist
+          path: dashboard/dist
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -93,28 +114,17 @@ jobs:
 
   build-macos:
     name: Build macOS Universal Binaries (ARM64 & x86_64)
+    needs: build-dashboard
     runs-on: macos-14
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
+      - name: Download Prebuilt Dashboard Dist
+        uses: actions/download-artifact@v4
         with:
-          version: 9
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: "pnpm"
-          cache-dependency-path: "dashboard/pnpm-lock.yaml"
-
-      - name: Build Dashboard Frontend
-        run: |
-          cd dashboard
-          pnpm install --frozen-lockfile
-          pnpm build
+          name: dashboard-dist
+          path: dashboard/dist
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
