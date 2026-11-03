@@ -1,0 +1,62 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Welcome to Wasche">
+  <main class="flex flex-col items-center justify-center min-h-screen w-full px-6 text-center select-none bg-[#0b141a]">
+    <!-- Brand Logo: Large, Clean, No Background, No Border, No Shadows -->
+    <div class="mb-6 flex items-center justify-center">
+      <img src="/wasche.png" alt="Wasche" class="w-40 h-40 object-contain drop-shadow-none" />
+    </div>
+
+    <!-- Welcoming Headings & Text -->
+    <h1 class="text-2xl font-bold text-[#e9edef] tracking-tight mb-2">
+      Welcome to Wasche
+    </h1>
+    <p class="text-sm text-[#8696a0] max-w-md leading-relaxed mb-8">
+      WhatsApp broadcast scheduler, multi-number management, and human-like messaging engine.
+    </p>
+
+    <!-- Interactive Button & Countdown Redirect Indicator -->
+    <div class="flex flex-col items-center gap-3">
+      <a
+        href="/campaign"
+        class="h-10 px-5 text-sm font-semibold rounded-xl bg-[#00a884] hover:bg-[#00c49f] text-[#111b21] flex items-center gap-2 cursor-pointer transition-all no-underline active:scale-95 shadow-none"
+      >
+        <span>Open Campaigns</span>
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-right">
+          <path d="M5 12h14"></path>
+          <path d="m12 5 7 7-7 7"></path>
+        </svg>
+      </a>
+
+      <div class="flex items-center gap-2 text-xs text-[#8696a0]/80 mt-1">
+        <span class="w-1.5 h-1.5 rounded-full bg-[#00a884] animate-pulse"></span>
+        <span id="redirectNotice">Redirecting automatically in 2s...</span>
+      </div>
+    </div>
+  </main>
+
+  <script is:inline>
+    (function() {
+      const notice = document.getElementById('redirectNotice');
+      const start = Date.now();
+      const delay = 2200;
+
+      function update() {
+        const elapsed = Date.now() - start;
+        const remaining = Math.max(0, Math.ceil((delay - elapsed) / 1000));
+        if (notice) {
+          notice.textContent = remaining > 0 ? 'Redirecting automatically in ' + remaining + 's...' : 'Opening campaigns...';
+        }
+        if (elapsed >= delay) {
+          window.location.href = '/campaign';
+        } else {
+          setTimeout(update, 200);
+        }
+      }
+
+      setTimeout(update, 200);
+    })();
+  </script>
+</Layout>
