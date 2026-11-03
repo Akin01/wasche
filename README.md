@@ -1,4 +1,11 @@
-# Wasche (WhatsApp Scheduler & MCP Sidecar)
+<p align="center">
+  <img src="dashboard/public/wasche.png" alt="Wasche Logo" width="160" />
+</p>
+
+<h1 align="center">Wasche</h1>
+<p align="center">
+  <em>WhatsApp MCP Server, Background Scheduler Sidecar & Multi-Account Engine</em>
+</p>
 
 A Model Context Protocol (MCP) server and background scheduler sidecar for WhatsApp, powered by [`whatsapp-rust`](https://github.com/crmne/whatsapp-rust) and built with the official Rust MCP SDK [`rmcp`](https://github.com/modelcontextprotocol/rust-sdk).
 
