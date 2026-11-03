@@ -121,7 +121,7 @@ jobs:
           merge-multiple: true
 
       - name: Assemble npm package bundle
-        run: node scripts/assemble-npm.js npm-artifacts "${{ github.ref_name }}"
+        run: node scripts/assemble-npm.js npm-artifacts "${{ inputs.tag || github.ref_name }}"
       - name: Publish to npm registry
         run: |
           cd npm
@@ -132,7 +132,7 @@ jobs:
   create-github-release:
     name: Create GitHub Release
     needs: build-binaries
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -149,11 +149,12 @@ jobs:
         run: bash scripts/package-release.sh release-binaries archives
 
       - name: Extract Release Notes from CHANGELOG.md
-        run: node scripts/extract-changelog.js "${{ github.ref_name }}" RELEASE_NOTES.md
+        run: node scripts/extract-changelog.js "${{ inputs.tag || github.ref_name }}" RELEASE_NOTES.md
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: archives/*
           body_path: RELEASE_NOTES.md
           draft: false

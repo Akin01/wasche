@@ -37,14 +37,19 @@ if (fs.existsSync(rootLicense)) {
   console.log('Synchronized LICENSE into npm package');
 }
 
-// Synchronize package.json version if version/tag was supplied
+// Synchronize package.json version if a valid semver tag was supplied
 if (tagVersion) {
-  const cleanVersion = tagVersion.replace(/^refs\/tags\/v|^v/, '');
-  const pkgPath = path.join(npmDir, 'package.json');
-  if (fs.existsSync(pkgPath)) {
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-    pkg.version = cleanVersion;
-    fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
-    console.log(`Synchronized npm/package.json version: ${cleanVersion}`);
+  const semverMatch = tagVersion.match(/^(?:refs\/tags\/)?v?(\d+\.\d+\.\d+.*)$/);
+  if (semverMatch) {
+    const cleanVersion = semverMatch[1];
+    const pkgPath = path.join(npmDir, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      pkg.version = cleanVersion;
+      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
+      console.log(`Synchronized npm/package.json version: ${cleanVersion}`);
+    }
+  } else {
+    console.log(`Version argument "${tagVersion}" is not a semver tag, retaining existing package.json version.`);
   }
 }

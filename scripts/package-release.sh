@@ -9,6 +9,11 @@ DEST_DIR="${2:-archives}"
 
 mkdir -p "$DEST_DIR"
 
+if ! command -v zip &>/dev/null; then
+  echo "Installing zip..."
+  sudo apt-get update && sudo apt-get install -y zip
+fi
+
 echo "Packaging release binaries from $SRC_DIR into $DEST_DIR..."
 
 cd "$SRC_DIR"
@@ -22,10 +27,10 @@ for file in *; do
     tar -czf "../$DEST_DIR/${file}.tar.gz" "$file"
   fi
 done
-cd - > /dev/null
+cd - >/dev/null
 
 cd "$DEST_DIR"
 echo "Generating SHA256 checksums..."
-sha256sum * > SHA256SUMS.txt
+sha256sum * >SHA256SUMS.txt
 ls -lh
 echo "Release packaging complete."
