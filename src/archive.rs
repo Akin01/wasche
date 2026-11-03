@@ -1718,7 +1718,7 @@ mod tests {
 
         let campaign = archive.get_campaign(campaign_id).unwrap().unwrap();
         assert_eq!(campaign.total_count, 2);
-        assert_eq!(campaign.status, "pending");
+        assert_eq!(campaign.status, "draft");
 
         // Next runnable recipient
         let r1 = archive

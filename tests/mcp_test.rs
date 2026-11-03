@@ -15,7 +15,7 @@ async fn setup_test_server() -> WascheMcpServer {
     let account_manager = AccountManager::init(dir.path().to_path_buf(), archive.clone())
         .await
         .unwrap();
-
+    let _ = account_manager.add_account("default").await;
     let (sidecar_handle, _worker) = SidecarHandle::new(archive, account_manager.clone());
 
     WascheMcpServer::new(account_manager, Arc::new(sidecar_handle))
