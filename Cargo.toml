@@ -2,7 +2,7 @@
 name = "wasche"
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "Apache-2.0"
 description = "WhatsApp MCP server and background broadcast scheduler sidecar"
 
 [lib]
