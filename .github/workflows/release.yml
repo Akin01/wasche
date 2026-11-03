@@ -1,0 +1,162 @@
+name: Release & Publish MCP to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.0)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  build-binaries:
+    name: Build Native Engine (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_name: wasche.exe
+            npm_binary_name: wasche-windows-x64.exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary_name: wasche
+            npm_binary_name: wasche-linux-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary_name: wasche
+            npm_binary_name: wasche-darwin-arm64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            binary_name: wasche
+            npm_binary_name: wasche-darwin-x64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+          cache-dependency-path: 'dashboard/pnpm-lock.yaml'
+
+      - name: Build Dashboard Frontend
+        run: |
+          cd dashboard
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build Rust binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare binary artifact
+        shell: bash
+        run: |
+          mkdir -p dist-bin
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "dist-bin/${{ matrix.npm_binary_name }}"
+          else
+            cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "dist-bin/${{ matrix.npm_binary_name }}"
+            chmod +x "dist-bin/${{ matrix.npm_binary_name }}"
+          fi
+
+      - name: Upload platform binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: dist-bin/${{ matrix.npm_binary_name }}
+          if-no-files-found: error
+
+  publish-npm:
+    name: Publish MCP Package to npm Registry
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js for npm publishing
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download all platform binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: npm-artifacts
+          pattern: binary-*
+          merge-multiple: true
+
+      - name: Assemble npm package bundle
+        run: node scripts/assemble-npm.js npm-artifacts "${{ github.ref_name }}"
+      - name: Publish to npm registry
+        run: |
+          cd npm
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  create-github-release:
+    name: Create GitHub Release
+    needs: build-binaries
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all platform binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-binaries
+          pattern: binary-*
+          merge-multiple: true
+
+      - name: Package archives for GitHub Release
+        run: bash scripts/package-release.sh release-binaries archives
+
+      - name: Extract Release Notes from CHANGELOG.md
+        run: node scripts/extract-changelog.js "${{ github.ref_name }}" RELEASE_NOTES.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: archives/*
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
