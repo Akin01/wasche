@@ -27,72 +27,75 @@ The **Wasche** project provides an official [Model Context Protocol (MCP)](https
 ```mermaid
 flowchart TB
     subgraph AgentLayer["1. AI Agent Layer"]
-        LLM["AI Agents\n(Claude / Codex / Gemini / Custom)"]
+        LLM["AI Agents\n(Claude / Cursor / Codex / Custom)"]
     end
 
     subgraph MCPLayer["2. MCP Protocol Server (rmcp)"]
-        Transport["Transport Layer\n(stdio / SSE)"]
+        Transport["Transport Layer\n(stdio / JSON-RPC)"]
         Router["Tool Router\n(#[tool_router])"]
-        Tools["MCP Tools Catalog\n• whatsapp_list_accounts\n• whatsapp_add_account\n• whatsapp_set_active_account\n• whatsapp_remove_account\n• whatsapp_get_status\n• whatsapp_get_qr_code\n• whatsapp_pair_with_phone\n• whatsapp_send_direct\n• whatsapp_schedule_broadcast\n• whatsapp_list_contacts\n• whatsapp_sync_contacts\n• whatsapp_get_broadcast_status\n• whatsapp_control_broadcast\n• whatsapp_list_broadcasts"]
+        Tools["34 MCP Tools Catalog\n• Lifecycle (9) • Messaging (3)\n• Contacts (3) • Campaigns (8)\n• Queues & Media (7) • Runs & Logs (3) • Dashboard (1)"]
+        BridgeDetection{"Primary Daemon\nAlready Running?"}
+        BridgeMode["Lightweight MCP Bridge\n(Auto-proxies requests over HTTP REST to port 3030)"]
     end
 
     subgraph MultiAccount["3. Multi-Account Manager (AccountManager)"]
-        AccDefault["Account: 'default'\n(Akin: +6281917973875)"]
-        AccSales["Account: 'sales'\n(+62819xxxxxxx)"]
-        AccWork["Account: 'support'\n(+1xxxxxxxxxx)"]
+        AccPool["Sender Account Pool\n(e.g. 'Grlossy', 'sales', 'support')"]
+        Engine1["Engine: 'Grlossy'"]
+        Engine2["Engine: 'sales'"]
     end
 
     subgraph SidecarLayer["4. Background Sidecar Engine (Tokio)"]
-        Scheduler["Cron / Interval Scheduler Ticker"]
-        QueueWorker["Pacing Queue Worker\n(Routes to campaign.account_id)"]
+        Scheduler["Campaign Dispatch Loop"]
+        ParallelWorkers["Multi-Worker Account Tasks\n(Strict per-SIM typing mutual exclusion)"]
         HumanSim["Human Emulation\n• Dynamic typing presence\n• Randomized cooldown jitter\n• Token interpolation"]
     end
 
     subgraph StorageLayer["5. Persistent State (SQLite)"]
-        DBCampaigns[("broadcast_campaigns &\nbroadcast_recipients")]
-        DBContacts[("contacts archive\n(950+ synced contacts)")]
-        DBSessions[("data/accounts/<id>/session.db\n(Isolated E2EE keypairs)")]
+        DBCampaigns[("archive.db\n(Campaigns, Runs, Logs, Recipient Queues)")]
+        DBSessions[("data/accounts/<id>/session.db\n(Isolated Signal/Noise E2EE keys)")]
     end
 
     LLM <-->|JSON-RPC| Transport
     Transport <--> Router
     Router --- Tools
-    Tools <--> MultiAccount
-    Tools <--> StorageLayer
+    Tools --> BridgeDetection
+    BridgeDetection -->|Yes| BridgeMode
+    BridgeDetection -->|No| MultiAccount
+    BridgeMode -->|HTTP REST| SidecarLayer
 
-    MultiAccount --> AccDefault
-    MultiAccount --> AccSales
-    MultiAccount --> AccWork
+    MultiAccount --> AccPool
+    AccPool --> Engine1
+    AccPool --> Engine2
 
-    AccDefault <--> DBSessions
-    AccSales <--> DBSessions
+    Engine1 <--> DBSessions
+    Engine2 <--> DBSessions
 
-    Scheduler --> QueueWorker
-    QueueWorker --> HumanSim
-    HumanSim -->|Route via Account Engine| MultiAccount
-    MultiAccount <-->|WebSocket + Signal E2EE| WACluster[("WhatsApp Web Servers")]
+    Scheduler --> ParallelWorkers
+    ParallelWorkers --> HumanSim
+    HumanSim -->|Dispatched Stanzas| AccPool
+    AccPool <-->|TLS WebSocket| WACluster[("WhatsApp Web Servers")]
 ```
 
 ---
 
-## 2. Multi-Account Management Model
+## 2. Multi-Account Management & Dual-Mode Execution Model
 
-Wasche supports running multiple WhatsApp phone numbers concurrently within a single MCP server process:
+Wasche supports running multiple WhatsApp phone numbers concurrently within a single host process or across multiple agent sessions:
 
 1. **Storage Isolation**:
    - Each account maintains an isolated Signal/Noise session store:
      `data/accounts/<account_id>/session.db`
    - Preserves independent identity keys, prekeys, and multi-device pairings.
-2. **Account Identifier**:
-   - Accounts are identified by short labels (e.g. `"default"`, `"sales"`, `"support"`).
-   - Any tool (`send_direct`, `schedule_broadcast`, `get_status`, etc.) accepts an optional `account_id` parameter. If omitted, it automatically routes through the currently active account.
-3. **Active Account Switching**:
-   - `whatsapp_set_active_account("sales")` switches the default account without needing to restart the MCP server.
-4. **Dynamic On-The-Fly Linking**:
+2. **Dual-Mode Process Architecture (Primary Daemon vs. Lightweight MCP Bridge)**:
+   - **Primary Daemon Mode**: When launched as the first process (or via background daemon), Wasche binds TCP port `3030` (with automatic discovery fallback to `3031`..`3035`), starts the HTTP REST API, runs the scheduler sidecar, and maintains persistent WebSocket connections.
+   - **Lightweight MCP Bridge Mode**: When subsequent MCP client sessions (e.g. subagents, parallel CLI turns) start up, Wasche probes the local port. Finding a live primary daemon, it enters lightweight bridge mode—forwarding all 34 tool calls via HTTP to the primary daemon with zero database lock contention or port conflicts.
+3. **Multi-Sender Account Pooling**:
+   - Campaigns can bind to a single sender (`account_id: "Grlossy"`), multiple senders (`account_id: "Grlossy, sales"`), or all connected senders (`account_id: "all"`).
+   - The sidecar spawns parallel account workers for each pooled account. Atomic database claims ensure sequential message dispatch per WhatsApp line while load-balancing the shared queue.
+4. **Dynamic On-The-Fly Linking & Pairing**:
    - Call `whatsapp_add_account("sales")` to register a new account on demand.
    - Immediately call `whatsapp_get_qr_code({"account_id": "sales"})` or `whatsapp_pair_with_phone` to link the new phone.
-
----
+   - Call `whatsapp_reset_account_pairing` to reset local session keys without losing campaign history.
 
 ## 3. Anti-Abuse Threat Model & Pacing Mechanics
 
@@ -114,27 +117,73 @@ Adopted directly from [[Safe WhatsApp Broadcast]]:
 
 ---
 
-## 4. MCP Tools Catalog (Multi-Account Edition)
+## 4. MCP Tools Catalog (34 Tools)
 
-| Tool Name                       | Key Parameters                                                                                       | Operational Description                                                                         |
-| :------------------------------ | :--------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------- |
-| `whatsapp_list_accounts`        | _none_                                                                                               | Lists all configured accounts, their connection state, phone number, and active flag.           |
-| `whatsapp_add_account`          | `account_id: string`                                                                                 | Registers a new account connection and immediately begins pairing.                              |
-| `whatsapp_set_active_account`   | `account_id: string`                                                                                 | Switches the default active account for subsequent tool invocations.                            |
-| `whatsapp_remove_account`       | `account_id: string`                                                                                 | Shuts down the engine, drops the BotHandle, removes managed account records, and purges the entire directory workspace (`data/accounts/{id}/`) from disk. |
-| `whatsapp_get_status`           | `account_id?: string`                                                                                | Returns connection status (`Connected`, `PairingQr`, `Disconnected`) for an account.            |
-| `whatsapp_get_qr_code`          | `account_id?: string`                                                                                | Generates QR code (raw, deep link, ASCII art, HTML preview) for an account.                     |
-| `whatsapp_pair_with_phone`      | `phone_number: string`, `account_id?: string`                                                        | Requests an 8-character pairing code to link by phone number instead of QR.                     |
-| `whatsapp_send_direct`          | `recipient: string`, `message?: string`, `attachment_path?: string`, `send_as?: "media" \| "document"`, `account_id?: string` | Sends an immediate 1:1 message, photo/video media, or raw document attachment. |
-| `whatsapp_send_media`           | `recipient: string`, `file_path: string`, `caption?: string`, `account_id?: string`                 | Sends an immediate inline photo, video, or audio file (max 16MB) with optional caption. |
-| `whatsapp_send_document`        | `recipient: string`, `file_path: string`, `caption?: string`, `file_name?: string`, `account_id?: string` | Sends an immediate document or raw uncompressed file (up to 100MB) with optional caption. |
-| `whatsapp_list_contacts`        | `query?: string`, `limit?: u32`                                                                      | Searches local archive contacts by name or phone.                                               |
-| `whatsapp_sync_contacts`        | `account_id?: string`                                                                                | Triggers Peer AppState Sync (`CriticalUnblockLow` snapshot replay) to fetch address book names. |
-| `whatsapp_schedule_broadcast`   | `name`, `template`, `recipients`, `attachment_path?`, `send_as?`, `account_id?`, `scheduled_at?`, `min_delay?`, `max_delay?` | Queues an anti-ban broadcast campaign with optional attached media/document. |
-| `whatsapp_get_broadcast_status` | `campaign_id: i64`                                                                                   | Queries real-time delivery metrics and logs.                                                    |
-| `whatsapp_control_broadcast`    | `campaign_id: i64`, `action: "pause" \| "resume" \| "abort"`                                         | Controls an active campaign.                                                                    |
-| `whatsapp_list_broadcasts`      | `status?: string`, `account_id?: string`                                                             | Lists campaigns filtered by status and/or account.                                              |
+Wasche exposes **34 declarative tools** across 7 functional categories:
 
+### 1. Account & Connection Lifecycle (9 Tools)
+| Tool Name | Key Parameters | Operational Description |
+| :--- | :--- | :--- |
+| `whatsapp_list_accounts` | _none_ | Lists all configured accounts, their connection state, phone number, and active flag. |
+| `whatsapp_add_account` | `account_id: string` | Registers a new account connection and immediately begins pairing. |
+| `whatsapp_set_active_account` | `account_id: string` | Switches the default active account for subsequent tool invocations. |
+| `whatsapp_remove_account` | `account_id: string` | Shuts down the engine, drops the BotHandle, removes managed account records, and purges workspace files. |
+| `whatsapp_rename_account` | `old_id: string`, `new_id: string` | Renames an account identifier across databases, directories, and campaigns. |
+| `whatsapp_get_status` | `account_id?: string` | Returns connection status (`Connected`, `PairingQr`, `Disconnected`) for an account. |
+| `whatsapp_get_qr_code` | `account_id?: string` | Generates QR code (raw, deep link, ASCII art, HTML preview) for an account. |
+| `whatsapp_pair_with_phone` | `phone_number: string`, `account_id?: string` | Requests an 8-character pairing code to link by phone number instead of QR. |
+| `whatsapp_reset_account_pairing` | `account_id: string` | Clears local pairing session and keys, preparing for fresh QR/code generation. |
+
+### 2. Direct Messaging & Media (3 Tools)
+| Tool Name | Key Parameters | Operational Description |
+| :--- | :--- | :--- |
+| `whatsapp_send_direct` | `recipient: string`, `message?: string`, `attachment_path?: string`, `send_as?: "media" \| "document"`, `account_id?: string` | Sends an immediate 1:1 message, photo/video media, or raw document attachment. |
+| `whatsapp_send_media` | `recipient: string`, `file_path: string`, `caption?: string`, `account_id?: string` | Sends an immediate inline photo, video, or audio file (max 16MB) with optional caption. |
+| `whatsapp_send_document` | `recipient: string`, `file_path: string`, `caption?: string`, `file_name?: string`, `account_id?: string` | Sends an immediate document or raw uncompressed file (up to 100MB) with optional caption. |
+
+### 3. Contacts & Address Book (3 Tools)
+| Tool Name | Key Parameters | Operational Description |
+| :--- | :--- | :--- |
+| `whatsapp_list_contacts` | `query?: string`, `account_id?: string`, `limit?: u32` | Searches local archive contacts by name or phone with account filtering. |
+| `whatsapp_sync_contacts` | `account_id?: string` | Triggers Peer AppState Sync (`CriticalUnblockLow` snapshot replay) to fetch address book names. |
+| `whatsapp_get_contact_avatar` | `jid: string`, `account_id?: string` | Fetches the high-resolution profile avatar picture URL for a contact JID. |
+
+### 4. Broadcast Campaigns & Anti-Ban Pacing (8 Tools)
+| Tool Name | Key Parameters | Operational Description |
+| :--- | :--- | :--- |
+| `whatsapp_schedule_broadcast` | `name`, `template`, `recipients`, `attachment_path?`, `send_as?`, `account_id?`, `account_ids?`, `scheduled_at?`, `min_delay_secs?`, `max_delay_secs?` | Queues an anti-ban broadcast campaign with multi-sender pooling and customizable jitter. |
+| `whatsapp_list_broadcasts` | `status?: string`, `account_id?: string` | Lists campaigns filtered by status and/or account. |
+| `whatsapp_get_broadcast_status` | `campaign_id: i64` | Queries real-time delivery metrics, execution runs, and recent logs. |
+| `whatsapp_control_broadcast` | `campaign_id: i64`, `action: string` | Controls an active campaign (`pause`, `resume`, `abort`, `delete`, `rerun`, `retry_failed`). |
+| `whatsapp_delete_broadcast` | `campaign_id: i64` | Permanently deletes a campaign and its recipient queue from SQLite. |
+| `whatsapp_rename_campaign` | `campaign_id: i64`, `name: string` | Renames an existing broadcast campaign. |
+| `whatsapp_update_campaign_template` | `campaign_id: i64`, `template: string` | Updates the message template of an existing campaign. |
+| `whatsapp_update_campaign_delay_range` | `campaign_id: i64`, `min_delay_secs: u32`, `max_delay_secs: u32` | Updates anti-ban jitter delay range between consecutive messages. |
+
+### 5. Campaign Queue, Attachments & Sender Pooling (7 Tools)
+| Tool Name | Key Parameters | Operational Description |
+| :--- | :--- | :--- |
+| `whatsapp_list_campaign_recipients` | `campaign_id: i64`, `query?: string`, `status?: string`, `limit?: u32`, `offset?: u32` | Lists campaign target recipients with search and status filtering (`queued`, `sent`, `failed`). |
+| `whatsapp_add_campaign_recipients` | `campaign_id: i64`, `recipients: Vec<RecipientInput>` | Adds target contacts with optional custom variable values to an existing campaign. |
+| `whatsapp_delete_campaign_recipients` | `campaign_id: i64`, `recipient_ids: Vec<i64>` | Removes recipient contacts from an existing broadcast campaign queue. |
+| `whatsapp_resend_recipient` | `campaign_id: i64`, `recipient_id: i64` | Requeues an individual recipient that previously failed or was aborted. |
+| `whatsapp_attach_campaign_media` | `campaign_id: i64`, `file_path: string`, `send_as?: string` | Attaches a media or document file to an existing campaign. |
+| `whatsapp_remove_campaign_attachments` | `campaign_id: i64`, `file_name?: string` | Removes specific or all attachments from an existing broadcast campaign. |
+| `whatsapp_set_campaign_attachment_mode` | `campaign_id: i64`, `file_name: string`, `send_as: string` | Toggles delivery mode (`media` vs `document`). |
+| `whatsapp_add_campaign_sender` | `campaign_id: i64`, `account_id: string` | Adds a sender WhatsApp account to an existing campaign for multi-account pooling. |
+| `whatsapp_remove_campaign_sender` | `campaign_id: i64`, `account_id: string` | Removes a sender WhatsApp account from a campaign pool. |
+
+### 6. Execution Runs & Delivery Logs (3 Tools)
+| Tool Name | Key Parameters | Operational Description |
+| :--- | :--- | :--- |
+| `whatsapp_list_campaign_runs` | `campaign_id: i64`, `limit?: u32` | Lists all execution runs (Run #1, Run #2, etc.) with sent/failed counts, status, and duration. |
+| `whatsapp_get_campaign_logs` | `campaign_id: i64`, `query?: string`, `status?: string`, `limit?: u32` | Retrieves delivery logs across all runs with search and status filtering. |
+| `whatsapp_get_run_logs` | `campaign_id: i64`, `run_id?: i64`, `query?: string`, `status?: string`, `limit?: u32` | Retrieves detailed delivery logs for a specific run with search and status filtering. |
+
+### 7. Dashboard & UI (1 Tool)
+| Tool Name | Key Parameters | Operational Description |
+| :--- | :--- | :--- |
+| `whatsapp_open_dashboard` | _none_ | Launches the live web dashboard in the default browser (`http://127.0.0.1:3030`). |
 ---
 
 ## 5. Campaign Execution Run Tracking & Delivery Logs

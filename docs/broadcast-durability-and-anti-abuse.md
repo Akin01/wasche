@@ -29,6 +29,9 @@ This document establishes the **production durability engineering specifications
 | **Partial Multi-Attachment Failure** | Network drops on file #2 of a multi-media batch | Contact receives half-payload, reported falsely as sent | **Fail-Fast Batch Rollback** (Halts batch, aborts `'sent'`, triggers retry) |
 | **Attachment Stanza Deduplication** | Same stanza ID reused across files in a multi-send | WhatsApp drops files #1..N as network replays | **Isolated Message ID Allocation** (`outbound_stanza_id` for #0, unique IDs for #1..N) |
 | **Transient Reconnect State Race** | Socket keepalive blip wipes in-memory status | UI falsely reports no devices connected (red dot); phone number drops | **Storage Identity Fallback & Dynamic Self-Healing** (Read `session.db` device identity; `client.pn()` sync) |
+| **Multi-Sender Parallel Typing Race** | Multiple workers concurrently claim queue items on same SIM | WhatsApp flags line for superhuman concurrent typing | **Account-Level Typing Mutual Exclusion** (`claimed_by` column; atomic lock per sending SIM) |
+| **Circuit Breaker Stall on Operator Action** | Account quarantined after 3 fails; operator fixes connection but worker sleeps | Campaign remains stuck in backoff delay | **Operator Action Auto-Reset & Wake Notification** (`notify_wake` wakes workers, resets breaker counters) |
+| **Transient `TIME_WAIT` Socket Conflict** | Fast restart hits OS TCP socket teardown on port 3030 | Daemon fails to bind web dashboard | **Automatic Exponential Retry & Fallback Port Range** (10 retries + fallback to 3031..3035) |
 ---
 
 ## 2. In-Flight Lease Expiration & Zombie Task Recovery

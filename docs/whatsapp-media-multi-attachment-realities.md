@@ -238,9 +238,26 @@ When an operator saves an edited photo or trimmed video, the browser immediately
 | **Subprocess Stdin Freeze** | Missing `-nostdin` caused FFmpeg to wait on daemon stdin pipes on Windows. | Enforced `.arg("-nostdin")`, `.stdin(Stdio::null())`, and `tokio::time::timeout`. | Zero hanging background processes. |
 
 ---
+## 9. Delivery Modes: Inline Media vs. Raw Document Channel
 
-## 9. Media & Attachment End-to-End Durability Guarantees
+Wasche provides first-class support for both WhatsApp delivery paradigms, switchable dynamically on a per-attachment basis:
 
+| Delivery Mode | Max File Size | Recipient Chat Experience | WhatsApp Compression | Best Used For |
+| :--- | :---: | :--- | :---: | :--- |
+| **`media`** | **16 MB** | Inline playable media player / photo bubble with interactive zoom | Lossy recompression | Photos, animated videos, voice notes, stickers, marketing teasers |
+| **`document`** | **100 MB+** | Full-width document file attachment card with file size and type | **Zero compression** (Byte-for-byte exact) | PDFs, invoices, spreadsheets, high-res RAW photos, 4K master video clips |
+
+### Programmatic Control via Model Context Protocol (MCP)
+
+Operators and AI agents configure delivery modes through dedicated tools:
+
+- **`whatsapp_attach_campaign_media`**: Attaches a local file to a campaign with initial `send_as` mode (`"media"` or `"document"`).
+- **`whatsapp_set_campaign_attachment_mode`**: Dynamically switches an existing campaign attachment's delivery mode between `"media"` and `"document"`.
+- **`whatsapp_remove_campaign_attachments`**: Removes a specific file name or purges all attachments from an existing campaign.
+
+---
+
+## 10. Media & Attachment End-to-End Durability Guarantees
 Wasche extends its core broadcast durability guarantees directly to all media attachments, photos, videos, and raw documents:
 
 ```mermaid
@@ -295,7 +312,7 @@ flowchart TD
 
 ---
 
-## 10. Cross-References
+## 11. Cross-References
 - [[WhatsApp MCP Server & Scheduler Sidecar]] — Full Wasche architecture, MCP tool schema, and SQLite queue persistence.
 - [[Broadcast Durability & WhatsApp Anti-Abuse Realities]] — In-flight lease sweep, 24h macro quotas, and 3-strike circuit breaker mechanics.
 - [[Safe WhatsApp Broadcast]] — Upstream keystroke simulation and human-pacing heuristics.
