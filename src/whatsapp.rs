@@ -254,7 +254,19 @@ impl WhatsAppEngine {
                 }
             }
             E::ContactUpdate(update) => {
-                let id = update.jid.to_string();
+                let raw_jid = update.jid.to_string();
+                let identity = if let Some(pn_jid) = &update.action.pn_jid {
+                    self.resolve_contact_identity(pn_jid)
+                        .or_else(|| self.resolve_contact_identity(&raw_jid))
+                } else {
+                    self.resolve_contact_identity(&raw_jid)
+                };
+
+                let (canonical_jid, phone_opt) = match identity {
+                    Some(id) => id,
+                    None => return,
+                };
+
                 let full_name = update
                     .action
                     .full_name
@@ -265,24 +277,17 @@ impl WhatsAppEngine {
                     .first_name
                     .clone()
                     .filter(|s| !s.trim().is_empty());
-                let phone = update.action.pn_jid.as_deref().map(|pn| {
-                    if let Some(digits) = pn.strip_suffix("@s.whatsapp.net") {
-                        format!("+{}", digits)
-                    } else {
-                        pn.to_string()
-                    }
-                });
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs() as i64;
 
                 let contact = Contact {
-                    id,
+                    id: canonical_jid,
                     full_name,
                     first_name,
                     push_name: None,
-                    phone_number: phone,
+                    phone_number: phone_opt,
                     avatar_url: None,
                     updated_at: now,
                 };
@@ -298,22 +303,20 @@ impl WhatsAppEngine {
                         .then(|| msg.info.push_name.to_string());
                     if let Some(push) = push_name {
                         let sender_jid = msg.info.source.sender.to_string();
-                        let phone = if let Some(digits) = sender_jid.strip_suffix("@s.whatsapp.net")
+                        if let Some((canonical_jid, phone_opt)) =
+                            self.resolve_contact_identity(&sender_jid)
                         {
-                            format!("+{}", digits)
-                        } else {
-                            sender_jid.clone()
-                        };
-                        let contact = Contact {
-                            id: sender_jid,
-                            full_name: None,
-                            first_name: None,
-                            push_name: Some(push),
-                            phone_number: Some(phone),
-                            avatar_url: None,
-                            updated_at: now,
-                        };
-                        let _ = self.archive.upsert_contact(&contact);
+                            let contact = Contact {
+                                id: canonical_jid,
+                                full_name: None,
+                                first_name: None,
+                                push_name: Some(push),
+                                phone_number: phone_opt,
+                                avatar_url: None,
+                                updated_at: now,
+                            };
+                            let _ = self.archive.upsert_contact(&contact);
+                        }
                     }
                 }
             }
@@ -326,9 +329,30 @@ impl WhatsAppEngine {
                     *self.status.write().await = ConnectionStatus::Disconnected;
                 }
                 if let Some(client) = self.client.read().await.clone() {
+                    let status_ref = Arc::clone(&self.status);
                     tokio::spawn(async move {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-                        let _ = client.reconnect_immediately().await;
+                        let mut backoff_secs = 2u64;
+                        const MAX_BACKOFF_SECS: u64 = 60u64;
+                        loop {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs))
+                                .await;
+                            {
+                                let current_status = status_ref.read().await;
+                                if matches!(
+                                    *current_status,
+                                    ConnectionStatus::Connected { .. }
+                                        | ConnectionStatus::Disconnected
+                                ) {
+                                    break;
+                                }
+                            }
+                            info!(
+                                "Attempting to reconnect WhatsApp client (backoff: {}s)...",
+                                backoff_secs
+                            );
+                            let _ = client.reconnect_immediately().await;
+                            backoff_secs = std::cmp::min(backoff_secs * 2, MAX_BACKOFF_SECS);
+                        }
                     });
                 }
             }
@@ -344,30 +368,53 @@ impl WhatsAppEngine {
         read_device_identity(&self.session_db_path)
     }
 
-    pub async fn get_status(&self) -> ConnectionStatus {
-        let current = self.status.read().await.clone();
+    pub fn resolve_lid_to_phone(&self, lid_user: &str) -> Option<String> {
+        let uri = format!(
+            "file:{}?mode=ro&immutable=1",
+            self.session_db_path.to_string_lossy().replace('\\', "/")
+        );
+        let conn = rusqlite::Connection::open_with_flags(
+            &uri,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .ok()?;
+        conn.query_row(
+            "SELECT phone_number FROM lid_pn_mapping WHERE lid = ?1 AND phone_number != '' LIMIT 1",
+            rusqlite::params![lid_user],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+    }
 
-        // 1. Check if live client has an active authenticated phone number
-        if let Some(client) = self.client.read().await.as_ref() {
-            if let Some(pn) = client.pn() {
-                let pn_str = pn.user.to_string();
-                let name = Some(client.push_name());
-
-                if !matches!(current, ConnectionStatus::Connected { .. }) {
-                    let mut status_guard = self.status.write().await;
-                    *status_guard = ConnectionStatus::Connected {
-                        phone_number: Some(pn_str.clone()),
-                        push_name: name.clone(),
-                    };
+    pub fn resolve_contact_identity(&self, raw_jid: &str) -> Option<(String, Option<String>)> {
+        let clean = normalize_user_jid(raw_jid)?;
+        if clean.ends_with("@s.whatsapp.net") {
+            let digits = clean.strip_suffix("@s.whatsapp.net")?;
+            let formatted_phone = if digits.chars().all(|c| c.is_ascii_digit()) && digits.len() >= 7
+            {
+                Some(format!("+{}", digits))
+            } else {
+                None
+            };
+            Some((clean, formatted_phone))
+        } else if clean.ends_with("@lid") {
+            let lid_user = clean.strip_suffix("@lid")?;
+            if let Some(digits) = self.resolve_lid_to_phone(lid_user) {
+                let clean_digits: String = digits.chars().filter(|c| c.is_ascii_digit()).collect();
+                if clean_digits.len() >= 7 {
+                    let canonical_jid = format!("{}@s.whatsapp.net", clean_digits);
+                    let formatted_phone = format!("+{}", clean_digits);
+                    return Some((canonical_jid, Some(formatted_phone)));
                 }
-                return ConnectionStatus::Connected {
-                    phone_number: Some(pn_str),
-                    push_name: name,
-                };
             }
+            None
+        } else {
+            None
         }
+    }
 
-        current
+    pub async fn get_status(&self) -> ConnectionStatus {
+        self.status.read().await.clone()
     }
 
     pub async fn is_connected(&self) -> bool {
@@ -721,4 +768,21 @@ pub fn render_svg_qr(data: &str) -> Result<String> {
     let code = QrCode::new(data.as_bytes()).context("Failed to generate QR code")?;
     let svg = code.render::<qrcode::render::svg::Color>().build();
     Ok(svg)
+}
+
+pub fn normalize_user_jid(jid_str: &str) -> Option<String> {
+    let trimmed = jid_str.trim();
+    if trimmed.is_empty()
+        || trimmed.ends_with("@g.us")
+        || trimmed.ends_with("@broadcast")
+        || trimmed.ends_with("@newsletter")
+    {
+        return None;
+    }
+    let (user_part, server_part) = trimmed.split_once('@')?;
+    let clean_user = match user_part.split_once(':') {
+        Some((u, _device)) => u,
+        None => user_part,
+    };
+    Some(format!("{}@{}", clean_user, server_part))
 }

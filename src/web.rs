@@ -1,6 +1,6 @@
 //! Embedded HTTP Web Dashboard and REST API for real-time campaign monitoring.
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -41,11 +41,47 @@ impl WebDashboard {
         self.port
     }
 
-    pub async fn start(self: Arc<Self>) -> Result<()> {
-        let addr = format!("127.0.0.1:{}", self.port);
-        let listener = TcpListener::bind(&addr).await?;
-        info!("Wasche Web Dashboard is live at http://{}", addr);
+    pub async fn start(self: Arc<Self>) -> Result<u16> {
+        let mut target_port = self.port;
+        let mut listener_opt = None;
+        let mut last_err = None;
 
+        for _attempt in 1..=10 {
+            let addr = format!("127.0.0.1:{}", target_port);
+            match TcpListener::bind(&addr).await {
+                Ok(l) => {
+                    listener_opt = Some(l);
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                }
+            }
+        }
+
+        if listener_opt.is_none() {
+            for fallback_port in (target_port + 1)..=(target_port + 5) {
+                let addr = format!("127.0.0.1:{}", fallback_port);
+                if let Ok(l) = TcpListener::bind(&addr).await {
+                    target_port = fallback_port;
+                    listener_opt = Some(l);
+                    break;
+                }
+            }
+        }
+
+        let listener = listener_opt.ok_or_else(|| {
+            anyhow!(
+                "Failed to bind dashboard listener to 127.0.0.1:{} or fallback ports: {}",
+                self.port,
+                last_err.map(|e| e.to_string()).unwrap_or_default()
+            )
+        })?;
+
+        let actual_port = target_port;
+        let addr = format!("127.0.0.1:{}", actual_port);
+        info!("Wasche Web Dashboard is live at http://{}", addr);
         let this = Arc::clone(&self);
         tokio::spawn(async move {
             loop {
@@ -203,7 +239,7 @@ impl WebDashboard {
             }
         });
 
-        Ok(())
+        Ok(actual_port)
     }
 
     async fn route_request(
@@ -215,7 +251,13 @@ impl WebDashboard {
         let path = uri.split('?').next().unwrap_or("/");
         let clean_path = path.trim_end_matches('/');
 
-        if method == "GET" && (clean_path.is_empty() || clean_path == "/index.html") {
+        if method == "GET"
+            && (clean_path.is_empty()
+                || clean_path == "/index.html"
+                || clean_path == "/campaign"
+                || clean_path == "/devices"
+                || clean_path == "/contacts")
+        {
             let index_file = self.dist_dir.join("index.html");
             if index_file.exists() {
                 if let Ok(bytes) = std::fs::read(&index_file) {
@@ -225,34 +267,14 @@ impl WebDashboard {
             if let Some(file) = DashboardAssets::get("index.html") {
                 return ("200 OK", "text/html; charset=utf-8", file.data.to_vec());
             }
-            if let Some(file) = DashboardAssets::get("campaign/index.html") {
-                return ("200 OK", "text/html; charset=utf-8", file.data.to_vec());
-            }
             (
                 "404 Not Found",
                 "text/plain",
                 b"Dashboard Not Found".to_vec(),
             )
         } else if method == "GET"
-            && (clean_path == "/campaign" || clean_path == "/devices" || clean_path == "/contacts")
-        {
-            let route_name = clean_path.trim_start_matches('/');
-            let rel_file = format!("{}/index.html", route_name);
-            let file_path = self.dist_dir.join(&rel_file);
-            if file_path.exists() {
-                if let Ok(bytes) = std::fs::read(&file_path) {
-                    return ("200 OK", "text/html; charset=utf-8", bytes);
-                }
-            }
-            if let Some(file) = DashboardAssets::get(&rel_file) {
-                return ("200 OK", "text/html; charset=utf-8", file.data.to_vec());
-            }
-            if let Some(file) = DashboardAssets::get("index.html") {
-                return ("200 OK", "text/html; charset=utf-8", file.data.to_vec());
-            }
-            ("404 Not Found", "text/plain", b"Route Not Found".to_vec())
-        } else if method == "GET"
-            && (path.starts_with("/_astro/")
+            && (path.starts_with("/assets/")
+                || path.starts_with("/_astro/")
                 || path.ends_with(".js")
                 || path.ends_with(".css")
                 || path.ends_with(".svg")
@@ -456,7 +478,8 @@ impl WebDashboard {
             let acc_id = path
                 .trim_start_matches("/api/accounts/")
                 .trim_end_matches("/remove");
-            match self.account_manager.remove_account(acc_id).await {
+            let acc_id = percent_decode_str(acc_id);
+            match self.account_manager.remove_account(&acc_id).await {
                 Ok(_) => ("200 OK", "application/json", b"{\"success\":true}".to_vec()),
                 Err(e) => (
                     "400 Bad Request",
@@ -1080,7 +1103,35 @@ impl WebDashboard {
                 .trim_start_matches("/api/runs/")
                 .trim_end_matches("/logs");
             if let Ok(run_id) = id_str.parse::<i64>() {
-                match self.sidecar.archive().list_logs_for_run(run_id, 200) {
+                let query = uri.split('?').nth(1).and_then(|q| {
+                    q.split('&')
+                        .find(|p| p.starts_with("query=") || p.starts_with("q="))
+                        .and_then(|p| p.split('=').nth(1))
+                        .map(percent_decode_str)
+                });
+                let status = uri.split('?').nth(1).and_then(|q| {
+                    q.split('&')
+                        .find(|p| p.starts_with("status="))
+                        .and_then(|p| p.split('=').nth(1))
+                        .map(percent_decode_str)
+                });
+                let limit = uri
+                    .split('?')
+                    .nth(1)
+                    .and_then(|q| {
+                        q.split('&')
+                            .find(|p| p.starts_with("limit="))
+                            .and_then(|p| p.split('=').nth(1))
+                            .and_then(|p| p.parse::<usize>().ok())
+                    })
+                    .unwrap_or(200);
+
+                match self.sidecar.archive().list_logs_for_run(
+                    run_id,
+                    query.as_deref(),
+                    status.as_deref(),
+                    limit,
+                ) {
                     Ok(logs) => {
                         let json = serde_json::to_vec(&logs).unwrap_or_else(|_| b"[]".to_vec());
                         ("200 OK", "application/json", json)
@@ -1227,6 +1278,144 @@ impl WebDashboard {
                         "400 Bad Request",
                         "application/json",
                         br#"{"error":"Missing name parameter"}"#.to_vec(),
+                    )
+                }
+            } else {
+                (
+                    "400 Bad Request",
+                    "application/json",
+                    br#"{"error":"Invalid ID"}"#.to_vec(),
+                )
+            }
+        } else if (method == "POST" || method == "PUT")
+            && path.starts_with("/api/campaigns/")
+            && path.ends_with("/delay-range")
+        {
+            let id_str = path
+                .trim_start_matches("/api/campaigns/")
+                .trim_end_matches("/delay-range");
+            if let Ok(id) = id_str.parse::<i64>() {
+                let mut min_delay = None;
+                let mut max_delay = None;
+                if let Some(body_start) = request_str.split("\r\n\r\n").nth(1) {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(body_start) {
+                        min_delay = val
+                            .get("min_delay_secs")
+                            .or_else(|| val.get("min"))
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as u32);
+                        max_delay = val
+                            .get("max_delay_secs")
+                            .or_else(|| val.get("max"))
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as u32);
+                    }
+                }
+                if min_delay.is_none() || max_delay.is_none() {
+                    if let Some(query) = uri.split('?').nth(1) {
+                        for pair in query.split('&') {
+                            if pair.starts_with("min=") || pair.starts_with("min_delay_secs=") {
+                                min_delay =
+                                    pair.split('=').nth(1).and_then(|v| v.parse::<u32>().ok());
+                            } else if pair.starts_with("max=")
+                                || pair.starts_with("max_delay_secs=")
+                            {
+                                max_delay =
+                                    pair.split('=').nth(1).and_then(|v| v.parse::<u32>().ok());
+                            }
+                        }
+                    }
+                }
+                match (min_delay, max_delay) {
+                    (Some(min), Some(max)) => {
+                        if min > max {
+                            (
+                                "400 Bad Request",
+                                "application/json",
+                                br#"{"error":"min_delay_secs cannot exceed max_delay_secs"}"#
+                                    .to_vec(),
+                            )
+                        } else {
+                            match self.sidecar.update_campaign_delay_range(id, min, max).await {
+                                Ok(_) => {
+                                    ("200 OK", "application/json", b"{\"success\":true}".to_vec())
+                                }
+                                Err(e) => (
+                                    "400 Bad Request",
+                                    "application/json",
+                                    format!(r#"{{"error":"{}"}}"#, e).into_bytes(),
+                                ),
+                            }
+                        }
+                    }
+                    _ => (
+                        "400 Bad Request",
+                        "application/json",
+                        br#"{"error":"Missing min_delay_secs or max_delay_secs"}"#.to_vec(),
+                    ),
+                }
+            } else {
+                (
+                    "400 Bad Request",
+                    "application/json",
+                    br#"{"error":"Invalid ID"}"#.to_vec(),
+                )
+            }
+        } else if (method == "POST" || method == "PUT")
+            && path.starts_with("/api/campaigns/")
+            && (path.ends_with("/senders/add") || path.ends_with("/senders/remove"))
+        {
+            let is_add = path.ends_with("/senders/add");
+            let id_str = if is_add {
+                path.trim_start_matches("/api/campaigns/")
+                    .trim_end_matches("/senders/add")
+            } else {
+                path.trim_start_matches("/api/campaigns/")
+                    .trim_end_matches("/senders/remove")
+            };
+            if let Ok(id) = id_str.parse::<i64>() {
+                let mut account_id = None;
+                if let Some(body_start) = request_str.split("\r\n\r\n").nth(1) {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(body_start) {
+                        account_id = val
+                            .get("account_id")
+                            .or_else(|| val.get("account"))
+                            .and_then(|v| v.as_str())
+                            .map(ToString::to_string);
+                    }
+                }
+                if account_id.is_none() {
+                    if let Some(query) = uri.split('?').nth(1) {
+                        for pair in query.split('&') {
+                            if pair.starts_with("account_id=") || pair.starts_with("account=") {
+                                account_id = pair.split('=').nth(1).map(percent_decode_str);
+                            }
+                        }
+                    }
+                }
+                if let Some(acc) = account_id {
+                    let result = if is_add {
+                        self.sidecar.add_campaign_sender(id, &acc).await
+                    } else {
+                        self.sidecar.remove_campaign_sender(id, &acc).await
+                    };
+                    match result {
+                        Ok(pool) => (
+                            "200 OK",
+                            "application/json",
+                            format!(r#"{{"success":true,"account_id":"{}"}}"#, pool).into_bytes(),
+                        ),
+                        Err(e) => (
+                            "400 Bad Request",
+                            "application/json",
+                            format!(r#"{{"error":"{}"}}"#, e).into_bytes(),
+                        ),
+                    }
+                } else {
+                    (
+                        "400 Bad Request",
+                        "application/json",
+                        br#"{"error":"Missing account_id parameter"}"#.to_vec(),
                     )
                 }
             } else {
@@ -2259,11 +2448,30 @@ impl WebDashboard {
                 let mut ids: Vec<i64> = Vec::new();
                 if let Some(body_start) = request_str.split("\r\n\r\n").nth(1) {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(body_start) {
-                        if let Some(arr) = val.get("recipient_ids").and_then(|v| v.as_array()) {
+                        if let Some(arr) = val
+                            .get("recipient_ids")
+                            .or_else(|| val.get("ids"))
+                            .and_then(|v| v.as_array())
+                        {
                             for item in arr {
                                 if let Some(n) = item.as_i64() {
                                     ids.push(n);
                                 }
+                            }
+                        } else if let Some(arr) = val.as_array() {
+                            for item in arr {
+                                if let Some(n) = item.as_i64() {
+                                    ids.push(n);
+                                }
+                            }
+                        }
+                        if let Some(n) = val
+                            .get("recipient_id")
+                            .or_else(|| val.get("id"))
+                            .and_then(|v| v.as_i64())
+                        {
+                            if !ids.contains(&n) {
+                                ids.push(n);
                             }
                         }
                     }
@@ -2272,8 +2480,13 @@ impl WebDashboard {
                     if let Some(query) = uri.split('?').nth(1) {
                         if let Some(raw_ids) = query
                             .split('&')
-                            .find(|p| p.starts_with("ids="))
-                            .and_then(|p| p.strip_prefix("ids="))
+                            .find(|p| {
+                                p.starts_with("ids=")
+                                    || p.starts_with("recipient_ids=")
+                                    || p.starts_with("id=")
+                                    || p.starts_with("recipient_id=")
+                            })
+                            .and_then(|p| p.split('=').nth(1))
                         {
                             for part in raw_ids.split(',') {
                                 if let Ok(n) = part.parse::<i64>() {
@@ -2282,6 +2495,13 @@ impl WebDashboard {
                             }
                         }
                     }
+                }
+                if ids.is_empty() {
+                    return (
+                        "400 Bad Request",
+                        "application/json",
+                        br#"{"error":"No recipient IDs provided to delete"}"#.to_vec(),
+                    );
                 }
                 match self.sidecar.delete_campaign_recipients(id, &ids).await {
                     Ok(deleted) => (
@@ -2422,6 +2642,76 @@ impl WebDashboard {
                     br#"{"error":"Invalid ID"}"#.to_vec(),
                 )
             }
+        } else if method == "GET"
+            && path.starts_with("/api/campaigns/")
+            && path.ends_with("/recipients")
+        {
+            let id_str = path
+                .trim_start_matches("/api/campaigns/")
+                .trim_end_matches("/recipients");
+            if let Ok(id) = id_str.parse::<i64>() {
+                let query = uri.split('?').nth(1).and_then(|q| {
+                    q.split('&')
+                        .find(|p| p.starts_with("query=") || p.starts_with("q="))
+                        .and_then(|p| p.split('=').nth(1))
+                        .map(percent_decode_str)
+                });
+                let status = uri.split('?').nth(1).and_then(|q| {
+                    q.split('&')
+                        .find(|p| p.starts_with("status="))
+                        .and_then(|p| p.split('=').nth(1))
+                        .map(percent_decode_str)
+                });
+                let limit = uri
+                    .split('?')
+                    .nth(1)
+                    .and_then(|q| {
+                        q.split('&')
+                            .find(|p| p.starts_with("limit="))
+                            .and_then(|p| p.split('=').nth(1))
+                            .and_then(|p| p.parse::<usize>().ok())
+                    })
+                    .unwrap_or(50);
+                let offset = uri
+                    .split('?')
+                    .nth(1)
+                    .and_then(|q| {
+                        q.split('&')
+                            .find(|p| p.starts_with("offset="))
+                            .and_then(|p| p.split('=').nth(1))
+                            .and_then(|p| p.parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+
+                match self
+                    .sidecar
+                    .list_campaign_recipients(
+                        id,
+                        query.as_deref(),
+                        status.as_deref(),
+                        limit,
+                        offset,
+                    )
+                    .await
+                {
+                    Ok(recipients) => {
+                        let json =
+                            serde_json::to_vec(&recipients).unwrap_or_else(|_| b"[]".to_vec());
+                        ("200 OK", "application/json", json)
+                    }
+                    Err(e) => (
+                        "500 Internal Error",
+                        "application/json",
+                        format!(r#"{{"error":"{}"}}"#, e).into_bytes(),
+                    ),
+                }
+            } else {
+                (
+                    "400 Bad Request",
+                    "application/json",
+                    br#"{"error":"Invalid ID"}"#.to_vec(),
+                )
+            }
         } else if (method == "POST" || method == "GET") && path.starts_with("/api/control/") {
             let segments: Vec<&str> = path
                 .trim_start_matches("/api/control/")
@@ -2492,7 +2782,7 @@ fn percent_decode_str(input: &str) -> String {
     String::from_utf8_lossy(&bytes).to_string()
 }
 
-fn percent_encode_str(input: &str) -> String {
+pub fn percent_encode_str(input: &str) -> String {
     let mut encoded = String::new();
     for b in input.bytes() {
         if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {

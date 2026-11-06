@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS broadcast_campaigns (
     name TEXT NOT NULL,
     template_body TEXT NOT NULL,
     attachment_path TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',
+    status TEXT NOT NULL DEFAULT 'draft',
     total_count INTEGER NOT NULL DEFAULT 0,
     sent_count INTEGER NOT NULL DEFAULT 0,
     failed_count INTEGER NOT NULL DEFAULT 0,
@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS broadcast_recipients (
     retry_count INTEGER NOT NULL DEFAULT 0,
     max_retries INTEGER NOT NULL DEFAULT 2,
     claimed_at INTEGER,
+    claimed_by TEXT,
     outbound_stanza_id TEXT,
     scheduled_at INTEGER,
     sent_at INTEGER
@@ -118,6 +119,8 @@ pub struct BroadcastCampaign {
     pub total_count: i64,
     pub sent_count: i64,
     pub failed_count: i64,
+    #[serde(default)]
+    pub total_sent_all_runs: Option<i64>,
     pub min_delay_secs: u32,
     pub max_delay_secs: u32,
     pub scheduled_at: Option<i64>,
@@ -288,7 +291,7 @@ impl Archive {
         );
         let _ = connection.execute("ALTER TABLE contacts ADD COLUMN avatar_url TEXT", []);
         let _ = connection.execute(
-            "UPDATE broadcast_recipients SET status = 'queued', claimed_at = NULL WHERE status = 'typing'",
+            "UPDATE broadcast_recipients SET status = 'queued', claimed_at = NULL, claimed_by = NULL WHERE status = 'typing'",
             [],
         );
         let _ = connection.execute(
@@ -305,6 +308,10 @@ impl Archive {
         );
         let _ = connection.execute(
             "ALTER TABLE broadcast_recipients ADD COLUMN outbound_stanza_id TEXT",
+            [],
+        );
+        let _ = connection.execute(
+            "ALTER TABLE broadcast_recipients ADD COLUMN claimed_by TEXT",
             [],
         );
         let _ = connection.execute(
@@ -353,6 +360,12 @@ impl Archive {
                 SET status = 'cancelled', error_reason = 'Cancelled - campaign aborted by user' 
                 WHERE status IN ('queued', 'typing') AND campaign_id IN (SELECT id FROM broadcast_campaigns WHERE status = 'aborted');",
         );
+        // Auto-cleanup legacy duplicate/garbage contacts created with device IDs (:57@lid) or raw @lid identifiers
+        let _ = connection.execute_batch(
+            "DELETE FROM contacts WHERE id LIKE '%:_@%' OR id LIKE '%:__@%' OR id LIKE '%@lid' OR phone_number LIKE '%@%';
+             DELETE FROM account_contacts WHERE contact_id LIKE '%:_@%' OR contact_id LIKE '%:__@%' OR contact_id LIKE '%@lid' OR phone_number LIKE '%@%';"
+        );
+
         Ok(Self {
             conn: Arc::new(Mutex::new(connection)),
         })
@@ -454,7 +467,10 @@ impl Archive {
         let mut stmt = conn.prepare(
             "SELECT id, account_id, name, template_body, attachment_path, status,
                     total_count, sent_count, failed_count, min_delay_secs,
-                    max_delay_secs, scheduled_at, created_at, updated_at
+                    max_delay_secs, scheduled_at, created_at, updated_at,
+                    (SELECT COALESCE(SUM(r.sent_count), broadcast_campaigns.sent_count)
+                     FROM broadcast_campaign_runs r
+                     WHERE r.campaign_id = broadcast_campaigns.id) as total_sent_all_runs
              FROM broadcast_campaigns WHERE id = ?1",
         )?;
 
@@ -471,7 +487,10 @@ impl Archive {
         let conn = self.conn.lock().unwrap();
         let mut sql = "SELECT id, account_id, name, template_body, attachment_path, status,
                               total_count, sent_count, failed_count, min_delay_secs,
-                              max_delay_secs, scheduled_at, created_at, updated_at
+                              max_delay_secs, scheduled_at, created_at, updated_at,
+                              (SELECT COALESCE(SUM(r.sent_count), broadcast_campaigns.sent_count)
+                               FROM broadcast_campaign_runs r
+                               WHERE r.campaign_id = broadcast_campaigns.id) as total_sent_all_runs
                        FROM broadcast_campaigns WHERE 1=1"
             .to_string();
 
@@ -514,6 +533,7 @@ impl Archive {
             scheduled_at: row.get(11)?,
             created_at: row.get(12)?,
             updated_at: row.get(13)?,
+            total_sent_all_runs: row.get(14).ok(),
         })
     }
 
@@ -666,36 +686,97 @@ impl Archive {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
 
-        tx.execute(
-            "INSERT INTO broadcast_delivery_logs (
-                campaign_id, run_id, recipient_id, jid, phone_number, display_name, status, error_reason, message_id, sender_account, timestamp
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                log.campaign_id,
-                log.run_id,
-                log.recipient_id,
-                log.jid,
-                log.phone_number,
-                log.display_name,
-                log.status,
-                log.error_reason,
-                log.message_id,
-                log.sender_account,
-                log.timestamp
-            ],
-        )?;
+        let existing: Option<(i64, String)> = if let (Some(rid), Some(rec_id)) =
+            (log.run_id, log.recipient_id)
+        {
+            tx.query_row(
+                    "SELECT id, status FROM broadcast_delivery_logs WHERE run_id = ?1 AND recipient_id = ?2 ORDER BY id DESC LIMIT 1",
+                    params![rid, rec_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+        } else {
+            None
+        };
 
-        if let Some(rid) = log.run_id {
-            if log.status == "sent" {
-                let _ = tx.execute(
-                    "UPDATE broadcast_campaign_runs SET sent_count = sent_count + 1 WHERE id = ?1",
-                    params![rid],
-                );
-            } else if log.status == "failed" {
-                let _ = tx.execute(
-                    "UPDATE broadcast_campaign_runs SET failed_count = failed_count + 1 WHERE id = ?1",
-                    params![rid],
-                );
+        if let Some((existing_id, prev_status)) = existing {
+            tx.execute(
+                "UPDATE broadcast_delivery_logs SET
+                    status = ?1,
+                    error_reason = ?2,
+                    message_id = ?3,
+                    sender_account = ?4,
+                    timestamp = ?5
+                 WHERE id = ?6",
+                params![
+                    log.status,
+                    log.error_reason,
+                    log.message_id,
+                    log.sender_account,
+                    log.timestamp,
+                    existing_id,
+                ],
+            )?;
+
+            if let Some(rid) = log.run_id {
+                if prev_status != log.status {
+                    if prev_status == "sent" && log.status != "sent" {
+                        let _ = tx.execute(
+                            "UPDATE broadcast_campaign_runs SET sent_count = MAX(0, sent_count - 1) WHERE id = ?1",
+                            params![rid],
+                        );
+                    } else if prev_status == "failed" && log.status != "failed" {
+                        let _ = tx.execute(
+                            "UPDATE broadcast_campaign_runs SET failed_count = MAX(0, failed_count - 1) WHERE id = ?1",
+                            params![rid],
+                        );
+                    }
+
+                    if log.status == "sent" && prev_status != "sent" {
+                        let _ = tx.execute(
+                            "UPDATE broadcast_campaign_runs SET sent_count = sent_count + 1 WHERE id = ?1",
+                            params![rid],
+                        );
+                    } else if log.status == "failed" && prev_status != "failed" {
+                        let _ = tx.execute(
+                            "UPDATE broadcast_campaign_runs SET failed_count = failed_count + 1 WHERE id = ?1",
+                            params![rid],
+                        );
+                    }
+                }
+            }
+        } else {
+            tx.execute(
+                "INSERT INTO broadcast_delivery_logs (
+                    campaign_id, run_id, recipient_id, jid, phone_number, display_name, status, error_reason, message_id, sender_account, timestamp
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    log.campaign_id,
+                    log.run_id,
+                    log.recipient_id,
+                    log.jid,
+                    log.phone_number,
+                    log.display_name,
+                    log.status,
+                    log.error_reason,
+                    log.message_id,
+                    log.sender_account,
+                    log.timestamp
+                ],
+            )?;
+
+            if let Some(rid) = log.run_id {
+                if log.status == "sent" {
+                    let _ = tx.execute(
+                        "UPDATE broadcast_campaign_runs SET sent_count = sent_count + 1 WHERE id = ?1",
+                        params![rid],
+                    );
+                } else if log.status == "failed" {
+                    let _ = tx.execute(
+                        "UPDATE broadcast_campaign_runs SET failed_count = failed_count + 1 WHERE id = ?1",
+                        params![rid],
+                    );
+                }
             }
         }
 
@@ -727,6 +808,16 @@ impl Archive {
         }
         Ok(result)
     }
+    pub fn get_run(&self, run_id: i64) -> Result<Option<CampaignRun>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, campaign_id, run_number, status, total_count, sent_count, failed_count, started_at, completed_at
+             FROM broadcast_campaign_runs
+             WHERE id = ?1",
+            params![run_id],
+            Self::map_run_row,
+        ).optional().map_err(Into::into)
+    }
 
     fn map_run_row(row: &rusqlite::Row) -> rusqlite::Result<CampaignRun> {
         Ok(CampaignRun {
@@ -742,15 +833,47 @@ impl Archive {
         })
     }
 
-    pub fn list_logs_for_run(&self, run_id: i64, limit: usize) -> Result<Vec<DeliveryLog>> {
+    pub fn list_logs_for_run(
+        &self,
+        run_id: i64,
+        query: Option<&str>,
+        status: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<DeliveryLog>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, campaign_id, run_id, recipient_id, jid, phone_number, display_name, status, error_reason, message_id, sender_account, timestamp
+        let mut sql = "SELECT id, campaign_id, run_id, recipient_id, jid, phone_number, display_name, status, error_reason, message_id, sender_account, timestamp
              FROM broadcast_delivery_logs
-             WHERE run_id = ?1
-             ORDER BY timestamp DESC, id DESC LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(params![run_id, limit as i64], Self::map_delivery_log_row)?;
+             WHERE run_id = ?1".to_string();
+
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(run_id)];
+
+        if let Some(st) = status.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            params.push(Box::new(st.to_lowercase()));
+            sql.push_str(&format!(" AND lower(status) = ?{}", params.len()));
+        }
+
+        if let Some(q) = query.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            let pattern = format!("%{}%", q.to_lowercase());
+            params.push(Box::new(pattern));
+            let idx = params.len();
+            sql.push_str(&format!(
+                " AND (lower(display_name) LIKE ?{0} OR phone_number LIKE ?{0} OR jid LIKE ?{0})",
+                idx
+            ));
+        }
+
+        params.push(Box::new(limit as i64));
+        sql.push_str(&format!(
+            " ORDER BY timestamp DESC, id DESC LIMIT ?{}",
+            params.len()
+        ));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let rusqlite_params = params
+            .iter()
+            .map(|p| &**p as &dyn rusqlite::ToSql)
+            .collect::<Vec<_>>();
+        let rows = stmt.query_map(rusqlite_params.as_slice(), Self::map_delivery_log_row)?;
         let mut result = Vec::new();
         for r in rows {
             result.push(r?);
@@ -761,19 +884,44 @@ impl Archive {
     pub fn list_logs_for_campaign(
         &self,
         campaign_id: i64,
+        query: Option<&str>,
+        status: Option<&str>,
         limit: usize,
     ) -> Result<Vec<DeliveryLog>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, campaign_id, run_id, recipient_id, jid, phone_number, display_name, status, error_reason, message_id, sender_account, timestamp
+        let mut sql = "SELECT id, campaign_id, run_id, recipient_id, jid, phone_number, display_name, status, error_reason, message_id, sender_account, timestamp
              FROM broadcast_delivery_logs
-             WHERE campaign_id = ?1
-             ORDER BY timestamp DESC, id DESC LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(
-            params![campaign_id, limit as i64],
-            Self::map_delivery_log_row,
-        )?;
+             WHERE campaign_id = ?1".to_string();
+
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(campaign_id)];
+
+        if let Some(st) = status.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            params.push(Box::new(st.to_lowercase()));
+            sql.push_str(&format!(" AND lower(status) = ?{}", params.len()));
+        }
+
+        if let Some(q) = query.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            let pattern = format!("%{}%", q.to_lowercase());
+            params.push(Box::new(pattern));
+            let idx = params.len();
+            sql.push_str(&format!(
+                " AND (lower(display_name) LIKE ?{0} OR phone_number LIKE ?{0} OR jid LIKE ?{0})",
+                idx
+            ));
+        }
+
+        params.push(Box::new(limit as i64));
+        sql.push_str(&format!(
+            " ORDER BY timestamp DESC, id DESC LIMIT ?{}",
+            params.len()
+        ));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let rusqlite_params = params
+            .iter()
+            .map(|p| &**p as &dyn rusqlite::ToSql)
+            .collect::<Vec<_>>();
+        let rows = stmt.query_map(rusqlite_params.as_slice(), Self::map_delivery_log_row)?;
         let mut result = Vec::new();
         for r in rows {
             result.push(r?);
@@ -831,6 +979,35 @@ impl Archive {
         conn.execute(
             "UPDATE broadcast_campaigns SET name = ?1, updated_at = ?2 WHERE id = ?3",
             params![new_name, now, campaign_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_campaign_delay_range(
+        &self,
+        campaign_id: i64,
+        min_delay_secs: u32,
+        max_delay_secs: u32,
+        now: i64,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE broadcast_campaigns SET min_delay_secs = ?1, max_delay_secs = ?2, updated_at = ?3 WHERE id = ?4",
+            params![min_delay_secs, max_delay_secs, now, campaign_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_campaign_account_id(
+        &self,
+        campaign_id: i64,
+        new_account_id: &str,
+        now: i64,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE broadcast_campaigns SET account_id = ?1, updated_at = ?2 WHERE id = ?3",
+            params![new_account_id, now, campaign_id],
         )?;
         Ok(())
     }
@@ -925,10 +1102,26 @@ impl Archive {
     pub fn claim_next_recipient(
         &self,
         campaign_id: i64,
+        account_id: &str,
         now: i64,
     ) -> Result<Option<BroadcastRecipient>> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
+
+        // 1. Strict Sender Mutual Exclusion: An account can only simulate typing and send to ONE recipient at a time.
+        // If this account (or a single-sender campaign) already holds an in-flight recipient in 'typing', refuse to claim another!
+        let is_account_typing: bool = tx
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM broadcast_recipients 
+                 WHERE campaign_id = ?1 AND status = 'typing' AND (claimed_by = ?2 OR claimed_by IS NULL)",
+                params![campaign_id, account_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if is_account_typing {
+            return Ok(None);
+        }
 
         let mut recipient_opt = {
             let mut stmt = tx.prepare(
@@ -969,9 +1162,9 @@ impl Archive {
 
             tx.execute(
                 "UPDATE broadcast_recipients 
-                 SET status = 'typing', claimed_at = ?1, outbound_stanza_id = ?2 
-                 WHERE id = ?3",
-                params![now, stanza_id, r.id],
+                 SET status = 'typing', claimed_at = ?1, claimed_by = ?2, outbound_stanza_id = ?3 
+                 WHERE id = ?4",
+                params![now, account_id, stanza_id, r.id],
             )?;
 
             r.status = "typing".to_string();
@@ -994,7 +1187,8 @@ impl Archive {
             "UPDATE broadcast_recipients 
              SET status = 'queued', 
                  error_reason = 'Worker lease expired; auto-requeued', 
-                 claimed_at = NULL 
+                 claimed_at = NULL,
+                 claimed_by = NULL 
              WHERE campaign_id = ?1 
                AND status = 'typing' 
                AND (?2 - claimed_at > ?3)",
@@ -1068,7 +1262,7 @@ impl Archive {
         let scheduled_at = now + delay_secs as i64;
         conn.execute(
             "UPDATE broadcast_recipients 
-             SET status = 'queued', retry_count = ?1, scheduled_at = ?2, error_reason = ?3 
+             SET status = 'queued', retry_count = ?1, scheduled_at = ?2, error_reason = ?3, claimed_at = NULL, claimed_by = NULL 
              WHERE id = ?4",
             params![next_retry_count, scheduled_at, error_reason, recipient_id],
         )?;
@@ -1245,7 +1439,7 @@ impl Archive {
 
         tx.execute(
             "UPDATE broadcast_recipients 
-             SET status = ?1, error_reason = ?2, sent_at = ?3 
+             SET status = ?1, error_reason = ?2, sent_at = ?3, claimed_at = NULL, claimed_by = NULL 
              WHERE id = ?4",
             params![status, error_reason, sent_at, recipient_id],
         )?;
@@ -1328,19 +1522,52 @@ impl Archive {
     pub fn list_recipients_for_campaign(
         &self,
         campaign_id: i64,
+        query: Option<&str>,
+        status: Option<&str>,
         limit: usize,
+        offset: usize,
     ) -> Result<Vec<BroadcastRecipient>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, campaign_id, jid, phone_number, display_name,
+        let mut sql = "SELECT id, campaign_id, jid, phone_number, display_name,
                     custom_fields_json, status, error_reason, retry_count, max_retries,
                     claimed_at, outbound_stanza_id, scheduled_at, sent_at
              FROM broadcast_recipients
-             WHERE campaign_id = ?1
-             ORDER BY id ASC LIMIT ?2",
-        )?;
+             WHERE campaign_id = ?1"
+            .to_string();
 
-        let rows = stmt.query_map(params![campaign_id, limit as i64], |row| {
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(campaign_id)];
+
+        if let Some(st) = status.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            params.push(Box::new(st.to_lowercase()));
+            sql.push_str(&format!(" AND lower(status) = ?{}", params.len()));
+        }
+
+        if let Some(q) = query.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            let pattern = format!("%{}%", q.to_lowercase());
+            params.push(Box::new(pattern));
+            let idx = params.len();
+            sql.push_str(&format!(
+                " AND (lower(display_name) LIKE ?{0} OR phone_number LIKE ?{0} OR jid LIKE ?{0})",
+                idx
+            ));
+        }
+
+        params.push(Box::new(limit as i64));
+        let limit_idx = params.len();
+        params.push(Box::new(offset as i64));
+        let offset_idx = params.len();
+
+        sql.push_str(&format!(
+            " ORDER BY id ASC LIMIT ?{} OFFSET ?{}",
+            limit_idx, offset_idx
+        ));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let rusqlite_params = params
+            .iter()
+            .map(|p| &**p as &dyn rusqlite::ToSql)
+            .collect::<Vec<_>>();
+        let rows = stmt.query_map(rusqlite_params.as_slice(), |row| {
             Ok(BroadcastRecipient {
                 id: row.get(0)?,
                 campaign_id: row.get(1)?,

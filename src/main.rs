@@ -5,7 +5,7 @@ use directories::ProjectDirs;
 use rmcp::{ServiceExt, transport::stdio};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use wasche::account::AccountManager;
@@ -24,6 +24,47 @@ async fn main() -> Result<()> {
         .init();
 
     info!("Starting Wasche: WhatsApp MCP Server & Background Scheduler Sidecar");
+
+    let web_port = std::env::var("WASCHE_WEB_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(3030);
+
+    // 1. Singleton Check: If an active Wasche primary daemon is already running on port web_port,
+    // run as a lightweight MCP bridge over stdio without spawning duplicate WhatsApp engines or touching session.db.
+    let is_daemon_running = {
+        let test_url = format!("http://127.0.0.1:{}/api/accounts", web_port);
+        let config = ureq::config::Config::builder()
+            .timeout_global(Some(std::time::Duration::from_millis(500)))
+            .build();
+        let agent: ureq::Agent = config.into();
+        agent.get(&test_url).call().is_ok()
+    };
+
+    if is_daemon_running {
+        info!(
+            "Active Wasche daemon detected on port {}. Running as lightweight MCP bridge (zero session interference).",
+            web_port
+        );
+        let server = WascheMcpServer::new_bridge(web_port);
+        let service = server
+            .serve(stdio())
+            .await
+            .context("Failed to start MCP bridge server over stdio")?;
+
+        info!("Wasche MCP Bridge is active and forwarding requests to primary daemon");
+        tokio::select! {
+            res = service.waiting() => {
+                if let Err(e) = res {
+                    error!("MCP stdio service encountered error: {}", e);
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                info!("Received Ctrl+C interrupt; initiating bridge shutdown...");
+            }
+        }
+        return Ok(());
+    }
 
     // Determine data directory (default to local ./data or platform app data)
     let data_dir = match std::env::var("WASCHE_DATA_DIR") {
@@ -64,10 +105,6 @@ async fn main() -> Result<()> {
         SidecarHandle::new(archive.clone(), account_manager.clone());
 
     // 4. Start Web Dashboard
-    let web_port = std::env::var("WASCHE_WEB_PORT")
-        .ok()
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(3030);
     let dist_dir = match std::env::var("WASCHE_DIST_DIR") {
         Ok(val) => PathBuf::from(val),
         Err(_) => {
@@ -87,7 +124,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    info!("Astro UI distribution directory: {:?}", dist_dir);
+    info!("SolidJS Vite UI distribution directory: {:?}", dist_dir);
 
     let web_dashboard = Arc::new(WebDashboard::new(
         account_manager.clone(),
@@ -96,44 +133,37 @@ async fn main() -> Result<()> {
         dist_dir,
     ));
 
-    // Only the primary instance that binds port 3030 runs the background scheduler sidecar.
-    // Secondary instances (like child MCP bridges) serve tool requests without running duplicate schedulers.
-    let is_primary_daemon = match Arc::clone(&web_dashboard).start().await {
-        Ok(_) => {
+    let actual_web_port = match Arc::clone(&web_dashboard).start().await {
+        Ok(port) => {
             info!(
                 "Primary Wasche daemon started successfully on port {}",
-                web_port
+                port
             );
-            true
+            port
         }
         Err(e) => {
-            info!(
-                "Port {} in use by active Wasche daemon ({}). Running as MCP bridge.",
-                web_port, e
-            );
-            false
+            warn!("Failed to start dashboard on port {}: {}", web_port, e);
+            web_port
         }
     };
 
     let cancel_token = tokio_util::sync::CancellationToken::new();
     let cancel_token_clone = cancel_token.clone();
 
-    if is_primary_daemon {
-        tokio::spawn(async move {
-            sidecar_worker.run(cancel_token_clone).await;
-        });
-    }
+    tokio::spawn(async move {
+        sidecar_worker.run(cancel_token_clone).await;
+    });
 
     // 5. Start MCP Server over stdio
     info!("Starting MCP Server on stdio transport...");
-    let server = WascheMcpServer::new(account_manager, Arc::new(sidecar_handle));
+    let server = WascheMcpServer::new(account_manager.clone(), Arc::new(sidecar_handle))
+        .with_web_port(actual_web_port);
     let service = server
         .serve(stdio())
         .await
         .context("Failed to start MCP server over stdio")?;
 
     info!("Wasche MCP Server is active and listening for agent requests");
-
     // Cooperative process shutdown coordinator
     tokio::select! {
         res = service.waiting() => {
@@ -147,6 +177,7 @@ async fn main() -> Result<()> {
     }
 
     cancel_token.cancel();
+    account_manager.shutdown_all().await;
     let _ = archive.wal_checkpoint();
     info!("Wasche MCP Server and background workers shut down cleanly");
     Ok(())

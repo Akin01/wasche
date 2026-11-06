@@ -503,4 +503,12 @@ impl AccountManager {
 
         Ok(None)
     }
+
+    pub async fn shutdown_all(&self) {
+        let mut lock = self.accounts.write().await;
+        for (id, engine) in lock.drain() {
+            info!("Gracefully shutting down WhatsApp engine for account '{}'...", id);
+            engine.shutdown().await;
+        }
+    }
 }

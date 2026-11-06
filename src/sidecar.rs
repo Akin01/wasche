@@ -122,9 +122,13 @@ impl SidecarHandle {
             .get_campaign(campaign_id)?
             .ok_or_else(|| anyhow!("Campaign #{} not found", campaign_id))?;
 
-        let recent_recipients = self.archive.list_recipients_for_campaign(campaign_id, 20)?;
+        let recent_recipients =
+            self.archive
+                .list_recipients_for_campaign(campaign_id, None, None, 1000, 0)?;
         let runs = self.archive.list_runs_for_campaign(campaign_id)?;
-        let recent_logs = self.archive.list_logs_for_campaign(campaign_id, 300)?;
+        let recent_logs = self
+            .archive
+            .list_logs_for_campaign(campaign_id, None, None, 300)?;
 
         Ok(CampaignStatusDetails {
             campaign,
@@ -303,6 +307,108 @@ impl SidecarHandle {
         Ok(())
     }
 
+    pub async fn update_campaign_delay_range(
+        &self,
+        campaign_id: i64,
+        min_delay_secs: u32,
+        max_delay_secs: u32,
+    ) -> Result<()> {
+        let now = now_secs();
+        let _ = self
+            .archive
+            .get_campaign(campaign_id)?
+            .ok_or_else(|| anyhow!("Campaign #{} not found", campaign_id))?;
+
+        self.archive.update_campaign_delay_range(
+            campaign_id,
+            min_delay_secs,
+            max_delay_secs,
+            now,
+        )?;
+        info!(
+            "Updated campaign #{} anti-ban jitter delay range to {}s - {}s",
+            campaign_id, min_delay_secs, max_delay_secs
+        );
+        Ok(())
+    }
+
+    pub async fn add_campaign_sender(&self, campaign_id: i64, account_id: &str) -> Result<String> {
+        let now = now_secs();
+        let current = self
+            .archive
+            .get_campaign(campaign_id)?
+            .ok_or_else(|| anyhow!("Campaign #{} not found", campaign_id))?;
+
+        let clean_acc = account_id.trim();
+        if clean_acc.is_empty() {
+            return Err(anyhow!("Account ID cannot be empty"));
+        }
+
+        let mut existing: Vec<String> = current
+            .account_id
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        if existing.iter().any(|a| a.eq_ignore_ascii_case(clean_acc)) {
+            return Ok(existing.join(", "));
+        }
+
+        existing.push(clean_acc.to_string());
+        let updated_str = existing.join(", ");
+        self.archive
+            .update_campaign_account_id(campaign_id, &updated_str, now)?;
+        info!(
+            "Added sender '{}' to campaign #{}; new sender pool: {}",
+            clean_acc, campaign_id, updated_str
+        );
+        Ok(updated_str)
+    }
+
+    pub async fn remove_campaign_sender(
+        &self,
+        campaign_id: i64,
+        account_id: &str,
+    ) -> Result<String> {
+        let now = now_secs();
+        let current = self
+            .archive
+            .get_campaign(campaign_id)?
+            .ok_or_else(|| anyhow!("Campaign #{} not found", campaign_id))?;
+
+        let clean_acc = account_id.trim();
+        let mut existing: Vec<String> = if current.account_id.trim().eq_ignore_ascii_case("all") {
+            let all_accs = self.account_manager.list_accounts().await;
+            all_accs.into_iter().map(|a| a.account_id).collect()
+        } else {
+            current
+                .account_id
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        };
+
+        existing.retain(|a| !a.eq_ignore_ascii_case(clean_acc));
+        if existing.is_empty() {
+            return Err(anyhow!(
+                "Cannot remove sender '{}': Campaign #{} must have at least one sender account",
+                clean_acc,
+                campaign_id
+            ));
+        }
+
+        let updated_str = existing.join(", ");
+        self.archive
+            .update_campaign_account_id(campaign_id, &updated_str, now)?;
+        info!(
+            "Removed sender '{}' from campaign #{}; new sender pool: {}",
+            clean_acc, campaign_id, updated_str
+        );
+        Ok(updated_str)
+    }
+
     pub async fn resend_recipient(&self, campaign_id: i64, recipient_id: i64) -> Result<()> {
         let now = now_secs();
         self.archive
@@ -315,6 +421,18 @@ impl SidecarHandle {
         );
         self.notify_wake.notify_waiters();
         Ok(())
+    }
+
+    pub async fn list_campaign_recipients(
+        &self,
+        campaign_id: i64,
+        query: Option<&str>,
+        status: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<crate::archive::BroadcastRecipient>> {
+        self.archive
+            .list_recipients_for_campaign(campaign_id, query, status, limit, offset)
     }
 
     pub async fn add_campaign_recipients(
@@ -624,7 +742,7 @@ impl SidecarWorker {
             }
 
             // Atomically claim next recipient
-            let recipient_opt = match archive.claim_next_recipient(campaign_id, now) {
+            let recipient_opt = match archive.claim_next_recipient(campaign_id, &account_id, now) {
                 Ok(r) => r,
                 Err(e) => {
                     error!(
@@ -642,22 +760,47 @@ impl SidecarWorker {
                     // Check if any recipients are left in the campaign
                     if let Ok(false) = archive.has_pending_recipients(campaign_id) {
                         let completion_now = now_secs();
+                        let (run_sent, run_failed) = if active_run.id > 0 {
+                            archive
+                                .get_run(active_run.id)
+                                .ok()
+                                .flatten()
+                                .map(|r| (r.sent_count, r.failed_count))
+                                .unwrap_or((0, 0))
+                        } else {
+                            (0, 0)
+                        };
+                        let run_status = if run_sent == 0 && run_failed > 0 {
+                            "failed"
+                        } else {
+                            "completed"
+                        };
+
+                        let camp_status = if let Ok(Some(c)) = archive.get_campaign(campaign_id) {
+                            if c.sent_count == 0 && c.failed_count > 0 {
+                                "failed"
+                            } else {
+                                "completed"
+                            }
+                        } else {
+                            run_status
+                        };
+
                         let _ = archive.update_campaign_status(
                             campaign_id,
-                            "completed",
+                            camp_status,
                             completion_now,
                         );
                         if active_run.id > 0 {
-                            let _ =
-                                archive.complete_run(active_run.id, "completed", completion_now);
+                            let _ = archive.complete_run(active_run.id, run_status, completion_now);
                         }
                         let mut active = active_campaign.write().await;
                         if *active == Some(campaign_id) {
                             *active = None;
                         }
                         info!(
-                            "Campaign #{} ('{}') successfully completed via parallel workers!",
-                            campaign_id, campaign.name
+                            "Campaign #{} ('{}') finished with status '{}' (run: '{}') via parallel workers!",
+                            campaign_id, campaign.name, camp_status, run_status
                         );
                         break;
                     }
