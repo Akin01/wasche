@@ -4,22 +4,16 @@ import {
   switchView,
   selectedCampaignDetails,
   accounts,
-  setActiveModal,
   sidebarCollapsed,
   setSidebarCollapsed,
   mobileSidebarOpen,
   setMobileSidebarOpen
 } from './store';
 import { getAccountStatusState } from './types';
-import {
-  Menu,
-  Plus,
-  RefreshCw,
-  Smartphone
-} from 'lucide-solid';
+import { Menu, Smartphone } from 'lucide-solid';
 
 export default function Header() {
-  const activeAccount = () => accounts().find(a => a.is_active) || accounts()[0];
+  const activeAccount = () => accounts().find((a) => a.is_active) || accounts()[0];
 
   const handleToggleSidebar = () => {
     if (window.innerWidth <= 900) {
@@ -54,15 +48,21 @@ export default function Header() {
                 {view() === 'campaigns'
                   ? 'Broadcast Campaigns'
                   : view() === 'devices'
-                  ? 'Connected WhatsApp Accounts'
-                  : 'Contacts'}
+                    ? 'Connected WhatsApp Accounts'
+                    : 'Contacts'}
               </h1>
             }
           >
             {/* Pure borderless, unbolded breadcrumb with consistent 14px size */}
             <div class="flex items-center gap-2 text-sm font-normal">
               <button
-                style={{ border: 'none', background: 'transparent', padding: '0', 'font-size': '14px', 'font-weight': '400' }}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  padding: '0',
+                  'font-size': '14px',
+                  'font-weight': '400'
+                }}
                 class="text-sm font-normal text-[#8696a0] hover:text-[#00a884] transition-colors cursor-pointer"
                 onClick={() => switchView('campaigns')}
               >
@@ -98,13 +98,12 @@ export default function Header() {
                 getAccountStatusState(activeAccount()?.status) === 'Connected'
                   ? 'bg-[#00a884] animate-pulse'
                   : activeAccount()?.phone_number
-                  ? 'bg-[#ffbc38]'
-                  : 'bg-[#f15c6d]'
+                    ? 'bg-[#ffbc38]'
+                    : 'bg-[#f15c6d]'
               }`}
             />
           </div>
         </Show>
-
       </div>
     </header>
   );

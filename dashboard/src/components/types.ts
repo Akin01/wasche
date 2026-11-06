@@ -12,7 +12,12 @@ export type AccountStatus = string | AccountStatusObject;
 
 export function getAccountStatusState(status: AccountStatus | undefined): string {
   if (typeof status === 'string') return status;
-  if (status && typeof status === 'object' && 'state' in status && typeof status.state === 'string') {
+  if (
+    status &&
+    typeof status === 'object' &&
+    'state' in status &&
+    typeof status.state === 'string'
+  ) {
     return status.state;
   }
   return 'Disconnected';
@@ -34,6 +39,7 @@ export interface Campaign {
   total_count: number;
   sent_count: number;
   failed_count: number;
+  total_sent_all_runs?: number | null;
   min_delay_secs: number;
   max_delay_secs: number;
   account_id: string;
@@ -117,7 +123,13 @@ export type ActiveModal =
   | { type: 'add_account'; accountId?: string }
   | { type: 'qr'; accountId: string }
   | { type: 'pair_phone'; accountId: string }
-  | { type: 'direct_message'; jid?: string; name?: string; accountId?: string; preserveState?: boolean }
+  | {
+      type: 'direct_message';
+      jid?: string;
+      name?: string;
+      accountId?: string;
+      preserveState?: boolean;
+    }
   | { type: 'add_contacts'; campaignId: number }
   | { type: 'create_campaign'; preserveState?: boolean }
   | { type: 'rename_campaign'; campaignId: number; currentName: string }
@@ -131,7 +143,12 @@ export type ActiveModal =
       fileSize: number;
       returnToDirectMessage?: boolean;
       returnToCreateCampaign?: boolean;
-      onTrim?: (params: { startTime: number; endTime: number; mute: boolean; preserveHd: boolean }) => void | Promise<void>;
+      onTrim?: (params: {
+        startTime: number;
+        endTime: number;
+        mute: boolean;
+        preserveHd: boolean;
+      }) => void | Promise<void>;
     }
   | {
       type: 'edit_photo';

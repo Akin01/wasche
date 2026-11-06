@@ -11,18 +11,12 @@ import {
 } from './store';
 import { getAccountStatusState } from './types';
 import { Tooltip } from '@kobalte/core/tooltip';
-import {
-  Radio,
-  Smartphone,
-  Users,
-  Check
-} from 'lucide-solid';
+import { Radio, Smartphone, Users, Check } from 'lucide-solid';
 
 export default function Sidebar() {
   const hasConnectedDevice = () =>
-    accounts().some(a => getAccountStatusState(a.status) === 'Connected');
-  const hasPairedDevice = () =>
-    accounts().some(a => !!a.phone_number);
+    accounts().some((a) => getAccountStatusState(a.status) === 'Connected');
+  const hasPairedDevice = () => accounts().some((a) => !!a.phone_number);
   return (
     <>
       {/* Mobile Drawer Overlay */}
@@ -45,7 +39,7 @@ export default function Sidebar() {
         <a
           href="/campaign"
           class="h-16 border-b border-[#222d34] flex items-center px-4 shrink-0 gap-3 no-underline cursor-pointer"
-          onClick={e => {
+          onClick={(e) => {
             e.preventDefault();
             switchView('campaigns');
           }}
@@ -90,7 +84,7 @@ export default function Sidebar() {
                     ? 'text-[#00a884] font-semibold'
                     : 'text-[#8696a0] hover:bg-[#202c33]/70 hover:text-[#e9edef]'
                 }`}
-                onClick={e => {
+                onClick={(e) => {
                   e.preventDefault();
                   switchView('campaigns');
                 }}
@@ -98,7 +92,9 @@ export default function Sidebar() {
                 <div class="flex items-center gap-2.5 min-w-0">
                   <Radio size={17} class="shrink-0" />
                   <Show when={!sidebarCollapsed()}>
-                    <span class="truncate" style={{ 'font-size': '14.5px' }}>Campaigns</span>
+                    <span class="truncate" style={{ 'font-size': '14.5px' }}>
+                      Campaigns
+                    </span>
                   </Show>
                 </div>
                 <Show when={!sidebarCollapsed()}>
@@ -132,7 +128,7 @@ export default function Sidebar() {
                     ? 'text-[#00a884] font-semibold'
                     : 'text-[#8696a0] hover:bg-[#202c33]/70 hover:text-[#e9edef]'
                 }`}
-                onClick={e => {
+                onClick={(e) => {
                   e.preventDefault();
                   switchView('devices');
                 }}
@@ -140,7 +136,9 @@ export default function Sidebar() {
                 <div class="flex items-center gap-2.5 min-w-0">
                   <Smartphone size={17} class="shrink-0" />
                   <Show when={!sidebarCollapsed()}>
-                    <span class="truncate" style={{ 'font-size': '14.5px' }}>Connected Devices</span>
+                    <span class="truncate" style={{ 'font-size': '14.5px' }}>
+                      Connected Devices
+                    </span>
                   </Show>
                 </div>
                 <Show when={!sidebarCollapsed()}>
@@ -149,8 +147,8 @@ export default function Sidebar() {
                       hasConnectedDevice()
                         ? 'bg-[#00a884]'
                         : hasPairedDevice()
-                        ? 'bg-[#ffbc38] animate-pulse'
-                        : 'bg-[#f15c6d]'
+                          ? 'bg-[#ffbc38] animate-pulse'
+                          : 'bg-[#f15c6d]'
                     }`}
                   />
                 </Show>
@@ -180,7 +178,7 @@ export default function Sidebar() {
                     ? 'text-[#00a884] font-semibold'
                     : 'text-[#8696a0] hover:bg-[#202c33]/70 hover:text-[#e9edef]'
                 }`}
-                onClick={e => {
+                onClick={(e) => {
                   e.preventDefault();
                   switchView('contacts');
                 }}
@@ -188,7 +186,9 @@ export default function Sidebar() {
                 <div class="flex items-center gap-2.5 min-w-0">
                   <Users size={17} class="shrink-0" />
                   <Show when={!sidebarCollapsed()}>
-                    <span class="truncate" style={{ 'font-size': '14.5px' }}>Contacts</span>
+                    <span class="truncate" style={{ 'font-size': '14.5px' }}>
+                      Contacts
+                    </span>
                   </Show>
                 </div>
                 <Show when={!sidebarCollapsed()}>
@@ -219,7 +219,7 @@ export default function Sidebar() {
               </div>
               <div class="space-y-1">
                 <For each={accounts()}>
-                  {acc => {
+                  {(acc) => {
                     const status = () => getAccountStatusState(acc.status);
                     const isOnline = () => status() === 'Connected';
                     return (
@@ -235,7 +235,7 @@ export default function Sidebar() {
                             ? 'text-[#e9edef] font-medium'
                             : 'text-[#8696a0] hover:bg-[#202c33]/60 hover:text-[#e9edef]'
                         }`}
-                        onClick={e => {
+                        onClick={(e) => {
                           e.preventDefault();
                           switchView('devices');
                         }}

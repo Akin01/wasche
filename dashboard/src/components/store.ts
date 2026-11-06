@@ -23,8 +23,12 @@ const getInitialCampId = (): number | null => {
   const urlId = new URLSearchParams(window.location.search).get('id');
   return urlId ? parseInt(urlId) : null;
 };
-export const [view, setView] = createSignal<'campaigns' | 'campaign-detail' | 'devices' | 'contacts'>(getInitialView());
-export const [selectedCampaignId, setSelectedCampaignId] = createSignal<number | null>(getInitialCampId());
+export const [view, setView] = createSignal<
+  'campaigns' | 'campaign-detail' | 'devices' | 'contacts'
+>(getInitialView());
+export const [selectedCampaignId, setSelectedCampaignId] = createSignal<number | null>(
+  getInitialCampId()
+);
 export const [detailTab, setDetailTab] = createSignal<'contacts' | 'template' | 'runs'>('contacts');
 
 // Domain Data Signals with localStorage SWR cache
@@ -46,12 +50,16 @@ export const [contacts, setContacts] = createSignal<Contact[]>([]);
 export const [contactsTotal, setContactsTotal] = createSignal(0);
 export const [contactsLoading, setContactsLoading] = createSignal(false);
 export const [contactsHasMore, setContactsHasMore] = createSignal(true);
-export const [selectedAccountForContacts, setSelectedAccountForContacts] = createSignal<string>('all');
+export const [selectedAccountForContacts, setSelectedAccountForContacts] =
+  createSignal<string>('all');
 export const [contactsSearchQuery, setContactsSearchQuery] = createSignal<string>('');
 
 export const [selectedRunId, setSelectedRunId] = createSignal<number | null>(null);
-export const [selectedCampaignDetails, setSelectedCampaignDetails] = createSignal<CampaignDetails | null>(null);
-export const [campaignAttachment, setCampaignAttachment] = createSignal<AttachmentInfo | null>(null);
+export const [selectedCampaignDetails, setSelectedCampaignDetails] =
+  createSignal<CampaignDetails | null>(null);
+export const [campaignAttachment, setCampaignAttachment] = createSignal<AttachmentInfo | null>(
+  null
+);
 export const [campaignAttachments, setCampaignAttachments] = createSignal<AttachmentInfo[]>([]);
 // UI Controls & Layout
 export const [sidebarCollapsed, setSidebarCollapsed] = createSignal<boolean>(
@@ -69,15 +77,17 @@ if (typeof window !== 'undefined') {
     setView,
     selectedCampaignId,
     setSelectedCampaignId,
-    fetchCampaignDetails
+    fetchCampaignDetails,
+    activeModal,
+    setActiveModal
   };
 }
 // Toast Notification
 export function showToast(message: string, type: 'success' | 'error' | 'info' = 'success') {
   const id = Math.random().toString(36).slice(2, 9);
-  setToasts(prev => [...prev, { id, message, type }]);
+  setToasts((prev) => [...prev, { id, message, type }]);
   setTimeout(() => {
-    setToasts(prev => prev.filter(t => t.id !== id));
+    setToasts((prev) => prev.filter((t) => t.id !== id));
   }, 3500);
 }
 
@@ -118,6 +128,7 @@ export function switchView(
 }
 
 // API Functions
+let lastAutoOpenedRunningRunId: number | null = null;
 let accountsReqCounter = 0;
 let latestAppliedAccountsReq = 0;
 export async function fetchAccounts() {
@@ -168,9 +179,23 @@ export async function fetchCampaignDetails(campaignId: number) {
         setSelectedCampaignDetails(data);
         const runs = data.runs || [];
         const currentSelected = selectedRunId();
-        if (!currentSelected || !runs.some(r => r.id === currentSelected)) {
-          const runningRun = runs.find(r => r.status === 'running');
-          setSelectedRunId(runningRun ? runningRun.id : (runs[0]?.id || null));
+        const runningRun = runs.find((r) => r.status === 'running');
+
+        if (runningRun) {
+          if (
+            runningRun.id !== lastAutoOpenedRunningRunId ||
+            !currentSelected ||
+            !runs.some((r) => r.id === currentSelected)
+          ) {
+            lastAutoOpenedRunningRunId = runningRun.id;
+            setSelectedRunId(runningRun.id);
+            setDetailTab('runs');
+          }
+        } else {
+          lastAutoOpenedRunningRunId = null;
+          if (!currentSelected || !runs.some((r) => r.id === currentSelected)) {
+            setSelectedRunId(runs[0]?.id || null);
+          }
         }
         await fetchCampaignAttachments(campaignId);
       }
@@ -193,7 +218,7 @@ export async function fetchContacts(query = '', account = 'all', append = false)
         ...c,
         jid: c.jid || c.id
       }));
-      setContacts(prev => (append ? [...prev, ...list] : list));
+      setContacts((prev) => (append ? [...prev, ...list] : list));
       setContactsTotal(data.total || 0);
       setContactsHasMore(list.length >= 50);
     }
@@ -217,8 +242,21 @@ export async function pollData() {
   }
 }
 
-export async function controlCampaign(id: number, action: 'pause' | 'resume' | 'abort' | 'rerun' | 'retry_failed' | 'delete') {
+export async function controlCampaign(
+  id: number,
+  action: 'pause' | 'resume' | 'abort' | 'rerun' | 'retry_failed' | 'delete' | 'resend_aborted'
+) {
   try {
+    if (
+      action === 'rerun' ||
+      action === 'retry_failed' ||
+      action === 'resume' ||
+      action === 'resend_aborted'
+    ) {
+      lastAutoOpenedRunningRunId = null;
+      setSelectedRunId(null);
+      setDetailTab('runs');
+    }
     const res = await fetch(`/api/control/${id}/${action}`, { method: 'POST' });
     const data = await res.json();
     if (data.success) {
@@ -291,7 +329,74 @@ export async function updateCampaignTemplate(id: number, template: string) {
   }
 }
 
-export async function addRecipients(campaignId: number, recipients: Array<{ phone_number: string; display_name?: string }>) {
+export async function addCampaignSender(campaignId: number, accountId: string) {
+  try {
+    const res = await fetch(`/api/campaigns/${campaignId}/senders/add`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_id: accountId })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`Added sender '${accountId}'`, 'success');
+      await fetchCampaignDetails(campaignId);
+    } else {
+      showToast(data.error || 'Failed to add sender', 'error');
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`Error adding sender: ${msg}`, 'error');
+  }
+}
+
+export async function removeCampaignSender(campaignId: number, accountId: string) {
+  try {
+    const res = await fetch(`/api/campaigns/${campaignId}/senders/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_id: accountId })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`Removed sender '${accountId}'`, 'success');
+      await fetchCampaignDetails(campaignId);
+    } else {
+      showToast(data.error || 'Failed to remove sender', 'error');
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`Error removing sender: ${msg}`, 'error');
+  }
+}
+
+export async function updateCampaignDelayRange(
+  campaignId: number,
+  minDelay: number,
+  maxDelay: number
+) {
+  try {
+    const res = await fetch(`/api/campaigns/${campaignId}/delay-range`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ min_delay_secs: minDelay, max_delay_secs: maxDelay })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`Delay range updated to ${minDelay}s – ${maxDelay}s`, 'success');
+      await fetchCampaignDetails(campaignId);
+    } else {
+      showToast(data.error || 'Failed to update delay range', 'error');
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`Error updating delay range: ${msg}`, 'error');
+  }
+}
+
+export async function addRecipients(
+  campaignId: number,
+  recipients: Array<{ phone_number: string; display_name?: string }>
+) {
   try {
     const res = await fetch(`/api/campaigns/${campaignId}/recipients`, {
       method: 'POST',
@@ -313,18 +418,26 @@ export async function addRecipients(campaignId: number, recipients: Array<{ phon
 }
 
 export async function deleteRecipient(campaignId: number, recipientId: number) {
+  return deleteRecipients(campaignId, [recipientId]);
+}
+
+export async function deleteRecipients(campaignId: number, recipientIds: number[]) {
+  if (recipientIds.length === 0) return;
   try {
     const res = await fetch(`/api/campaigns/${campaignId}/recipients/delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipient_id: recipientId })
+      body: JSON.stringify({ recipient_id: recipientIds[0], recipient_ids: recipientIds })
     });
     const data = await res.json();
-    if (data.success) {
-      showToast('Recipient removed', 'success');
+    if (data.success && data.deleted > 0) {
+      showToast(
+        recipientIds.length === 1 ? 'Recipient removed' : `Removed ${data.deleted} recipient(s)`,
+        'success'
+      );
       await fetchCampaignDetails(campaignId);
     } else {
-      showToast(data.error || 'Failed to remove recipient', 'error');
+      showToast(data.error || 'Failed to remove recipient(s)', 'error');
     }
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -334,7 +447,9 @@ export async function deleteRecipient(campaignId: number, recipientId: number) {
 
 export async function resendRecipient(campaignId: number, recipientId: number) {
   try {
-    const res = await fetch(`/api/campaigns/${campaignId}/recipients/${recipientId}/resend`, { method: 'POST' });
+    const res = await fetch(`/api/campaigns/${campaignId}/recipients/${recipientId}/resend`, {
+      method: 'POST'
+    });
     const data = await res.json();
     if (data.success) {
       showToast('Recipient requeued for delivery', 'success');
@@ -378,7 +493,7 @@ export async function uploadCampaignAttachments(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        files: files.map(f => ({
+        files: files.map((f) => ({
           file_name: f.fileName,
           file_data: f.fileDataB64,
           mime_type: f.mimeType,
@@ -408,7 +523,9 @@ export async function uploadCampaignAttachment(
   mimeType: string,
   thumbnailDataB64?: string
 ) {
-  return uploadCampaignAttachments(campaignId, [{ fileName, fileDataB64, mimeType, thumbnailDataB64 }]);
+  return uploadCampaignAttachments(campaignId, [
+    { fileName, fileDataB64, mimeType, thumbnailDataB64 }
+  ]);
 }
 
 export async function deleteCampaignAttachment(campaignId: number, fileName?: string) {
@@ -444,10 +561,7 @@ export async function updateAttachmentMode(
     });
     const data = await res.json();
     if (data.success) {
-      showToast(
-        `Set '${fileName}' to ${sendAs === 'document' ? 'Document' : 'Media'}`,
-        'info'
-      );
+      showToast(`Set '${fileName}' to ${sendAs === 'document' ? 'Document' : 'Media'}`, 'info');
       await fetchCampaignAttachments(campaignId);
       await fetchCampaignDetails(campaignId);
       return true;
@@ -523,7 +637,10 @@ export async function captureVideoFrame(
     });
     const data = await res.json();
     if (data.success) {
-      showToast(asPhoto ? 'Captured frame as photo attachment' : 'Updated video thumbnail from frame', 'success');
+      showToast(
+        asPhoto ? 'Captured frame as photo attachment' : 'Updated video thumbnail from frame',
+        'success'
+      );
       await fetchCampaignAttachments(campaignId);
       await fetchCampaignDetails(campaignId);
       return true;
@@ -538,11 +655,7 @@ export async function captureVideoFrame(
   }
 }
 
-export async function saveEditedPhoto(
-  campaignId: number,
-  fileName: string,
-  dataUrl: string
-) {
+export async function saveEditedPhoto(campaignId: number, fileName: string, dataUrl: string) {
   try {
     const base64Data = dataUrl.split(',')[1];
     if (!base64Data) throw new Error('Invalid image data');
@@ -554,7 +667,10 @@ export async function saveEditedPhoto(
     const ctx = canvas.getContext('2d');
     const img = new window.Image();
     img.src = dataUrl;
-    await new Promise(r => { img.onload = r; setTimeout(r, 2000); });
+    await new Promise((r) => {
+      img.onload = r;
+      setTimeout(r, 2000);
+    });
     ctx?.drawImage(img, 0, 0, 120, 120);
     const thumbB64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
 
@@ -588,13 +704,17 @@ export async function saveEditedPhoto(
 
 export async function setActiveAccount(id: string) {
   // Optimistically mark account active for immediate UI transition
-  setAccounts(prev => prev.map(a => ({
-    ...a,
-    is_active: a.account_id === id
-  })));
+  setAccounts((prev) =>
+    prev.map((a) => ({
+      ...a,
+      is_active: a.account_id === id
+    }))
+  );
 
   try {
-    const res = await fetch(`/api/accounts/${encodeURIComponent(id)}/set-active`, { method: 'POST' });
+    const res = await fetch(`/api/accounts/${encodeURIComponent(id)}/set-active`, {
+      method: 'POST'
+    });
     const data = await res.json();
     if (data.success) {
       showToast(`Active account switched to '${id}'`, 'success');
@@ -616,10 +736,10 @@ export async function removeAccount(id: string) {
     const data = await res.json();
     if (data.success) {
       showToast(`Account '${id}' removed`, 'success');
-      setAccounts(prev => prev.filter(a => a.account_id !== id));
+      setAccounts((prev) => prev.filter((a) => a.account_id !== id));
       if (typeof window !== 'undefined') {
         try {
-          const rem = accounts().filter(a => a.account_id !== id);
+          const rem = accounts().filter((a) => a.account_id !== id);
           if (rem.length > 0) {
             localStorage.setItem('wasche_cached_accounts', JSON.stringify(rem));
           } else {

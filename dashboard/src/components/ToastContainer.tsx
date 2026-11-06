@@ -6,18 +6,18 @@ export default function ToastContainer() {
   return (
     <div id="toastContainer" class="toast-container">
       <For each={toasts()}>
-        {toast => (
+        {(toast) => (
           <div class={`toast-item toast-${toast.type}`}>
-            <span style={{ display: 'flex', 'align-items': 'center', 'flex-shrink': '0' }}>
+            <span class="flex items-center shrink-0">
               {toast.type === 'success' ? (
-                <Check size={16} class="text-[#00a884]" />
+                <Check size={16} class="text-accent" />
               ) : toast.type === 'error' ? (
-                <AlertCircle size={16} class="text-[#f15c6d]" />
+                <AlertCircle size={16} class="text-danger" />
               ) : (
-                <HelpCircle size={16} class="text-[#53bdeb]" />
+                <HelpCircle size={16} class="text-info" />
               )}
             </span>
-            <span style={{ flex: '1', 'line-height': '1.4' }}>{toast.message}</span>
+            <span class="flex-1 leading-snug">{toast.message}</span>
           </div>
         )}
       </For>

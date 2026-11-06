@@ -1,10 +1,5 @@
 import { For, Show } from 'solid-js';
-import {
-  accounts,
-  setActiveAccount,
-  removeAccount,
-  setActiveModal
-} from './store';
+import { accounts, setActiveAccount, removeAccount, setActiveModal } from './store';
 import { getAccountStatusState } from './types';
 import {
   Smartphone,
@@ -58,7 +53,7 @@ export default function DevicesView() {
           }
         >
           <For each={accounts()}>
-            {acc => (
+            {(acc) => (
               <div
                 class="card rounded-2xl p-5 relative transition-all"
                 style={{
@@ -70,7 +65,12 @@ export default function DevicesView() {
                 {/* Active Account Pill */}
                 <Show when={acc.is_active}>
                   <div
-                    style={{ border: '1px solid #00a884', background: 'transparent', color: '#00a884', 'box-shadow': 'none' }}
+                    style={{
+                      border: '1px solid #00a884',
+                      background: 'transparent',
+                      color: '#00a884',
+                      'box-shadow': 'none'
+                    }}
                     class="absolute top-3.5 right-3.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1"
                   >
                     <CheckCircle size={11} />
@@ -109,7 +109,12 @@ export default function DevicesView() {
                     when={!acc.is_active}
                     fallback={
                       <button
-                        style={{ border: '1px solid #00a884', background: 'transparent', color: '#00a884', 'box-shadow': 'none' }}
+                        style={{
+                          border: '1px solid #00a884',
+                          background: 'transparent',
+                          color: '#00a884',
+                          'box-shadow': 'none'
+                        }}
                         class="h-8 px-3 text-xs font-semibold rounded-lg flex-1 flex items-center justify-center gap-1.5 cursor-default select-none"
                         disabled
                       >
@@ -140,7 +145,9 @@ export default function DevicesView() {
                     <button
                       class="btn-secondary h-8 px-2.5 text-xs font-medium rounded-lg flex items-center justify-center gap-1 cursor-pointer"
                       title="Pair with Phone Code"
-                      onClick={() => setActiveModal({ type: 'pair_phone', accountId: acc.account_id })}
+                      onClick={() =>
+                        setActiveModal({ type: 'pair_phone', accountId: acc.account_id })
+                      }
                     >
                       <KeyRound size={13} />
                       <span>Pair Phone</span>
@@ -165,7 +172,10 @@ export default function DevicesView() {
                     title="Reset Pairing Session"
                     onClick={async () => {
                       try {
-                        const res = await fetch(`/api/accounts/${encodeURIComponent(acc.account_id)}/reset-pairing`, { method: 'POST' });
+                        const res = await fetch(
+                          `/api/accounts/${encodeURIComponent(acc.account_id)}/reset-pairing`,
+                          { method: 'POST' }
+                        );
                         if (res.ok) {
                           setActiveModal({ type: 'qr', accountId: acc.account_id });
                         }

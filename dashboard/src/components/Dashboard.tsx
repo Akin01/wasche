@@ -1,4 +1,4 @@
-import { onMount, onCleanup, Switch, Match } from 'solid-js';
+import { onSettled, Switch, Match } from 'solid-js';
 import {
   view,
   switchView,
@@ -8,6 +8,7 @@ import {
   fetchCampaigns,
   fetchContacts,
   pollData,
+  selectedCampaignDetails,
   setSidebarCollapsed,
   setMobileSidebarOpen
 } from './store';
@@ -27,7 +28,7 @@ interface DashboardProps {
 export default function Dashboard(props: DashboardProps) {
   let pollInterval: number | undefined;
 
-  onMount(() => {
+  onSettled(() => {
     // Determine view from URL or props
     const path = window.location.pathname;
     if (path.startsWith('/devices')) {
@@ -67,8 +68,17 @@ export default function Dashboard(props: DashboardProps) {
       setMobileSidebarOpen(false);
     }
 
-    // Auto-poll campaigns and device statuses (5s interval)
-    pollInterval = window.setInterval(pollData, 5000);
+    // Adaptive auto-poll: 1.2s when campaign is actively running, 4s when idle
+    let isDestroyed = false;
+    const pollLoop = async () => {
+      if (isDestroyed) return;
+      await pollData();
+      if (isDestroyed) return;
+      const isRunning = selectedCampaignDetails()?.campaign?.status === 'running';
+      const delay = isRunning ? 1200 : 4000;
+      pollInterval = window.setTimeout(pollLoop, delay);
+    };
+    pollInterval = window.setTimeout(pollLoop, 1000);
     const onResize = () => {
       if (window.innerWidth <= 900) {
         setMobileSidebarOpen(false);
@@ -93,11 +103,13 @@ export default function Dashboard(props: DashboardProps) {
     };
     window.addEventListener('popstate', onPopState);
 
-    onCleanup(() => {
+    return () => {
+      isDestroyed = true;
+      clearTimeout(pollInterval);
       clearInterval(pollInterval);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('popstate', onPopState);
-    });
+    };
   });
 
   return (
@@ -109,7 +121,10 @@ export default function Dashboard(props: DashboardProps) {
       <div class="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-[#0b141a] relative">
         <Header />
 
-        <main class="flex-1 overflow-y-auto p-8 max-[900px]:p-4 max-w-[1600px] w-full mx-auto" id="contentContainer">
+        <main
+          class="flex-1 overflow-y-auto p-8 max-[900px]:p-4 max-w-[1600px] w-full mx-auto"
+          id="contentContainer"
+        >
           <Switch>
             <Match when={view() === 'campaigns'}>
               <CampaignsView />
