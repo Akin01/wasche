@@ -1,24 +1,30 @@
 {
   "name": "dashboard",
+  "version": "0.2.0",
   "type": "module",
-  "version": "0.0.1",
-  "engines": {
-    "node": ">=22.23.4"
-  },
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
-    "preview": "astro preview",
-    "astro": "astro"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
   },
   "dependencies": {
-    "@astrojs/solid-js": "^7.1.2",
-    "@kobalte/core": "^0.13.14",
-    "@tailwindcss/vite": "^4.3.3",
-    "astro": "^7.4.4",
-    "lucide-astro": "^0.556.0",
+    "@kobalte/core": "2.0.0-alpha.4",
+    "@solidjs/web": "2.0.0-rc.21",
     "lucide-solid": "^1.65.0",
-    "solid-js": "^1.9.18",
-    "tailwindcss": "^4.3.3"
+    "solid-js": "2.0.0-rc.21"
+  },
+  "devDependencies": {
+    "@solidjs/compiler-win32-x64-msvc": "2.0.0-rc.21",
+    "@tailwindcss/vite": "^4.3.3",
+    "oxfmt": "^0.76.0",
+    "oxlint": "^1.91.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6",
+    "vite-plugin-solid": "^3.0.0-next.27"
   }
 }

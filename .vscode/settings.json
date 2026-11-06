@@ -1,0 +1,6 @@
+{
+  "css.lint.unknownAtRules": "ignore",
+  "html.validate.scripts": true,
+  "html.validate.styles": true,
+  "json.validate.enable": true
+}
