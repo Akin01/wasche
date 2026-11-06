@@ -7,12 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.2.0] - 2026-11-06
 
-### Planned
-- Webhook callback dispatching for outbound message delivery status receipts (`sent`, `delivered`, `read`).
-- Native recurring cron syntax (e.g. `0 9 * * 1-5`) for recurring weekly broadcast campaigns.
-- Inbound interactive message reply trigger hooks for conversational AI agents.
+### Summary
+Major feature, performance, and architecture release: expands MCP tooling to 34 native tools, introduces multi-sender account pooling and load balancing, migrates the embedded dashboard to a native SolidJS v2 + Vite 8 SPA with Tailwind CSS v4, decomposes monolithic views into modular components, and delivers full real-time delivery tracking across running queues.
+
+---
+
+### Added
+
+#### Model Context Protocol (MCP) Expansion (34 Tools)
+- Expanded native MCP catalog from 20 to **34 comprehensive tools**:
+  - `whatsapp_rename_campaign`: Programmatically rename broadcast campaigns.
+  - `whatsapp_update_campaign_delay_range`: Update anti-ban jitter delays (`min_delay_secs`, `max_delay_secs`) in real-time.
+  - `whatsapp_add_campaign_sender`: Add a WhatsApp account to an active/staged campaign for sender pooling.
+  - `whatsapp_remove_campaign_sender`: Safely remove a sender account from a campaign pool (maintaining at least 1 sender invariant).
+  - `whatsapp_attach_campaign_media`: Programmatically attach inline media or raw documents to campaigns.
+  - `whatsapp_remove_campaign_attachments`: Clear campaign attachment queues.
+  - `whatsapp_set_campaign_attachment_mode`: Switch between `media` (inline compressed, max 16 MB) and `document` (raw uncompressed file up to 100 MB).
+  - `whatsapp_delete_campaign_recipients`: Batch remove recipients from campaign queues.
+  - `whatsapp_get_campaign_logs`: Search and filter delivery logs across all execution runs.
+  - `whatsapp_get_run_logs`: Fetch paginated run logs with search by name/number and status filtering.
+  - `whatsapp_reset_account_pairing`: Reset local session and Noise keys for an account, preparing for re-pairing.
+
+#### Multi-Sender Account Pooling & Parallel Worker Dispatch
+- **Load-Balanced Campaign Execution**: Campaigns support pooling multiple WhatsApp accounts (`account_id: "Grlossy, sales"` or `"all"`) dispatched concurrently.
+- **Strict Per-SIM Typing Mutual Exclusion**: Prevents concurrent typing collisions on the same physical line; separate Tokio worker tasks service different accounts in parallel.
+- **Dynamic Worker Cooldown & Circuit Breakers**: Independent per-account backoff and 3-strike circuit breaker quarantine logic.
+
+#### Native SolidJS v2 + Vite 8 SPA Dashboard Architecture
+- Replaced hybrid Astro multi-page setup with a lightning-fast client-side SPA built on **SolidJS v2** (`2.0.0-rc.21`) and **Vite 8**.
+- **Component Decomposition**:
+  - Modularized monolithic `Modals.tsx` (5,157 lines) into individual dedicated dialogs under `dashboard/src/components/modals/`.
+  - Modularized `CampaignDetailView.tsx` (2,074 lines) into standalone tab views under `dashboard/src/components/campaign-detail/` (`CampaignMacroCards`, `CampaignContactsTab`, `CampaignTemplateTab`, `CampaignRunLogsTab`).
+- **Native Solid 2 SVG Icons**: Custom `icons.tsx` providing zero-overhead, statically compiled SVG primitives for the 57 icons used across Wasche, eliminating `@solidjs/web` 1.x import incompatibilities.
+- **High-Performance Linting & Formatting**: Added `oxlint` and `oxfmt` configuration, achieving 15ms lint and format passes.
+
+#### Tailwind CSS v4 & High-FPS GPU Transitions
+- Full modernization to Tailwind CSS v4 `@theme` tokens, removing deprecated `bg-gradient-to-*` in favor of `bg-linear-to-*`.
+- Native `@theme` keyframes (`modal-scale`, `popover-scale`, `fade-enter`) with hardware-accelerated GPU layer promotion (`will-change: transform, opacity; transform: translateZ(0)`).
+- Layered shadow tokens (`--shadow-modal`, `--shadow-dropdown`, `--shadow-popover`) with negative spreads for crisp rendering and reduced GPU raster overhead.
+
+---
+
+### Fixed
+
+- **Real-Time Running Campaign Queue Visibility**: Fixed `CampaignRunLogsTab` condition where running campaigns only displayed previously sent messages. The table now displays all recipients in real-time, reflecting live transitions (`queued` $\to$ `typing` $\to$ `sent` / `failed`).
+- **Send Now Button Hover State**: Fixed icon disappearance on hover by removing hardcoded `text-[#00a884]` and establishing global CSS rules ensuring action button SVG strokes switch to white (`#fff`) on hover.
+- **Confirm Modal Sizing**: Increased `confirm` dialog max width to `max-w-md` (448px), eliminating cramped text wrapping and close button collisions.
+- **Clear Selection Button Padding**: Added explicit padding (`px-2.5`, `h-6`) and rounded borders to the "Clear selection" pill in `AddContactsModal`.
+- **Recipient Query Pagination**: Increased backend `list_recipients_for_campaign` limit in `get_campaign_status` from 20 to 1,000, ensuring complete recipient lists are available to dashboard clients.
+- **Adaptive Dashboard Polling**: Accelerated polling to 1.2s when an active campaign is running, reverting to 4s when idle.
+- **VS Code Language Server Cleanliness**: Added canonical `.vscode/settings.json` configuring `css.lint.unknownAtRules: "ignore"`, updated `launch.json` to Vite, and eliminated all warnings across CSS, JSON, HTML, Markdown, and TypeScript language servers.
+
+---
+
+### Performance
+
+- **Modal Opening Latency**: Reduced `create_campaign` max frame time from 99.9ms down to 17.3ms (-83%), and `cut_video` from 66.6ms down to 17.3ms (-74%).
+- **Backdrop Blur Elimination**: Removed `backdrop-blur-xs` on full-screen modal overlays, preventing full-viewport Gaussian blur passes on every animation frame.
+- **State Hydration**: Batching and deferring mount-time canvas/video initialization by one frame to guarantee fluid 60+ FPS modal openings.
 
 ---
 
