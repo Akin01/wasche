@@ -13,6 +13,7 @@
   <a href="https://github.com/modelcontextprotocol/rust-sdk"><img src="https://img.shields.io/badge/MCP-Official%20Rust%20SDK-purple.svg" alt="Model Context Protocol" /></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-2024%20edition-orange.svg" alt="Rust 2024" /></a>
   <a href="https://solidjs.com"><img src="https://img.shields.io/badge/dashboard-SolidJS%20v2%20%2B%20Vite-emerald.svg" alt="SolidJS v2 + Vite" /></a>
+  <a href="https://m8ven.ai/mcp/akin01-wasche-14ow30?s=readme"><img src="https://m8ven.ai/badge/mcp/akin01-wasche-14ow30?v=0626be58d33bb37971b8ce32f22a3d2a" alt="M8ven Score" /></a>
 </p>
 
 ---

@@ -5,6 +5,7 @@
 [![npm version](https://img.shields.io/npm/v/@akin01/wasche.svg)](https://www.npmjs.com/package/@akin01/wasche)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-purple.svg)](https://modelcontextprotocol.io)
+[![M8ven Score](https://m8ven.ai/badge/mcp/akin01-wasche-14ow30?v=0626be58d33bb37971b8ce32f22a3d2a)](https://m8ven.ai/mcp/akin01-wasche-14ow30?s=readme)
 
 **Wasche** provides an official MCP server and persistent background scheduler sidecar for WhatsApp, implemented natively in Rust. It enables AI agents (Claude, Cursor, Codex, Gemini, etc.) to safely orchestrate multiple WhatsApp phone numbers, query contacts, dispatch media, and execute high-durability broadcast campaigns protected by human behavioral emulation heuristics.
 
