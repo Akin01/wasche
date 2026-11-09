@@ -145,6 +145,40 @@ impl SidecarHandle {
             .get_campaign(campaign_id)?
             .ok_or_else(|| anyhow!("Campaign #{} not found", campaign_id))?;
 
+        let is_starting_action = matches!(
+            action.to_lowercase().as_str(),
+            "resume"
+                | "start"
+                | "rerun"
+                | "restart"
+                | "retry_failed"
+                | "retry-failed"
+                | "resend_aborted"
+                | "retry_aborted"
+                | "resend-aborted"
+        );
+        if is_starting_action {
+            let pool_accounts: Vec<String> = current
+                .account_id
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let conflicts = self
+                .archive
+                .get_conflicting_running_senders(campaign_id, &pool_accounts)?;
+            if !conflicts.is_empty() {
+                let (acc, other_id, other_name) = &conflicts[0];
+                return Err(anyhow!(
+                    "Cannot start campaign #{}: sender account '{}' is currently active in campaign #{} ('{}'). Pause or complete the existing campaign first.",
+                    campaign_id,
+                    acc,
+                    other_id,
+                    other_name
+                ));
+            }
+        }
+
         match action.to_lowercase().as_str() {
             "pause" => {
                 self.archive
@@ -353,6 +387,21 @@ impl SidecarHandle {
 
         if existing.iter().any(|a| a.eq_ignore_ascii_case(clean_acc)) {
             return Ok(existing.join(", "));
+        }
+        if current.status == "running" {
+            let conflicts = self
+                .archive
+                .get_conflicting_running_senders(campaign_id, &[clean_acc.to_string()])?;
+            if !conflicts.is_empty() {
+                let (acc, other_id, other_name) = &conflicts[0];
+                return Err(anyhow!(
+                    "Cannot add sender '{}' to running campaign #{}: account is currently active in campaign #{} ('{}').",
+                    acc,
+                    campaign_id,
+                    other_id,
+                    other_name
+                ));
+            }
         }
 
         existing.push(clean_acc.to_string());

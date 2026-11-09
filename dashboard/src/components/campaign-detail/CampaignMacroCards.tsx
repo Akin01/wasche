@@ -1,6 +1,7 @@
 import { createSignal, onSettled, Show, For } from 'solid-js';
 import {
   accounts,
+  campaigns,
   switchView,
   controlCampaign,
   deleteCampaign,
@@ -54,6 +55,24 @@ export default function CampaignMacroCards(props: {
     props.currentRun ? props.currentRun.failed_count : props.campaign.failed_count;
   const abortedCount = () =>
     props.recipients.filter((r) => r.status === 'cancelled' || r.status === 'aborted').length;
+  const getConflictingRunningCampaign = (acc: string) => {
+    const clean = acc.trim().toLowerCase();
+    for (const c of campaigns()) {
+      if (c.status === 'running' && c.id !== props.campaign.id) {
+        if (c.account_id.trim().toLowerCase() === 'all') {
+          return c;
+        }
+        const cAccounts = c.account_id
+          .split(',')
+          .map((s) => s.trim().toLowerCase())
+          .filter(Boolean);
+        if (cAccounts.includes(clean)) {
+          return c;
+        }
+      }
+    }
+    return null;
+  };
 
   onSettled(() => {
     const handleOutsideClick = (e: MouseEvent) => {
@@ -317,7 +336,7 @@ export default function CampaignMacroCards(props: {
 
                                       {/* Name & Phone */}
                                       <div class="min-w-0">
-                                        <div class="flex items-center gap-1.5">
+                                        <div class="flex items-center gap-1.5 flex-wrap">
                                           <span class="font-medium text-xs text-[#e9edef] truncate">
                                             {acc.account_id}
                                           </span>
@@ -325,6 +344,15 @@ export default function CampaignMacroCards(props: {
                                             <span class="text-[9px] font-bold text-[#00a884] bg-[#00a884]/20 px-1 rounded">
                                               Active
                                             </span>
+                                          </Show>
+                                          <Show
+                                            when={getConflictingRunningCampaign(acc.account_id)}
+                                          >
+                                            {(b) => (
+                                              <span class="text-[9px] font-semibold text-[#ffbc38] bg-[#ffbc38]/15 border border-[#ffbc38]/30 px-1 rounded">
+                                                Busy in #{b().id}
+                                              </span>
+                                            )}
                                           </Show>
                                         </div>
                                         <Show when={acc.phone_number}>
@@ -376,10 +404,17 @@ export default function CampaignMacroCards(props: {
                     fallback={
                       <div>
                         <div
-                          class="text-xl font-bold text-[#e9edef] truncate"
+                          class="text-xl font-bold text-[#e9edef] truncate flex items-center gap-2"
                           title={props.campaign.account_id}
                         >
-                          {props.campaign.account_id}
+                          <span class="truncate">{props.campaign.account_id}</span>
+                          <Show when={getConflictingRunningCampaign(props.campaign.account_id)}>
+                            {(busy) => (
+                              <span class="text-[10px] font-semibold text-[#ffbc38] bg-[#ffbc38]/15 border border-[#ffbc38]/30 px-1.5 py-0.5 rounded-md shrink-0">
+                                Busy in #{busy().id}
+                              </span>
+                            )}
+                          </Show>
                         </div>
                         <span class="text-[11px] text-[#8696a0] font-mono block mt-0.5 truncate">
                           {accounts().find((a) => a.account_id === props.campaign.account_id)
@@ -398,24 +433,46 @@ export default function CampaignMacroCards(props: {
                       {/* Sender Account Chips with Remove button */}
                       <div class="flex items-center gap-1.5 mt-1.5 overflow-x-auto pb-0.5 max-w-full">
                         <For each={poolList()}>
-                          {(acc) => (
-                            <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[#202c33] border border-[#2a3942] text-[10.5px] text-[#e9edef] font-medium shrink-0 group">
-                              <span class="w-3.5 h-3.5 rounded-full bg-[#00a884]/20 text-[#00a884] font-bold text-[8.5px] flex items-center justify-center">
-                                {acc.charAt(0).toUpperCase()}
-                              </span>
-                              <span class="truncate max-w-[70px]">{acc}</span>
-                              <Show when={poolList().length > 1}>
-                                <button
-                                  type="button"
-                                  class="text-[#8696a0] hover:text-[#f15c6d] p-0.5 rounded transition-colors cursor-pointer"
-                                  title={`Remove '${acc}' from campaign`}
-                                  onClick={() => removeCampaignSender(props.campaign.id, acc)}
+                          {(acc) => {
+                            const busy = () => getConflictingRunningCampaign(acc);
+                            return (
+                              <span
+                                class={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[10.5px] font-medium shrink-0 group ${
+                                  busy()
+                                    ? 'bg-[#ffbc38]/10 border-[#ffbc38]/40 text-[#ffbc38]'
+                                    : 'bg-[#202c33] border-[#2a3942] text-[#e9edef]'
+                                }`}
+                              >
+                                <span
+                                  class={`w-3.5 h-3.5 rounded-full font-bold text-[8.5px] flex items-center justify-center ${
+                                    busy()
+                                      ? 'bg-[#ffbc38]/20 text-[#ffbc38]'
+                                      : 'bg-[#00a884]/20 text-[#00a884]'
+                                  }`}
                                 >
-                                  <X size={10} />
-                                </button>
-                              </Show>
-                            </span>
-                          )}
+                                  {acc.charAt(0).toUpperCase()}
+                                </span>
+                                <span class="truncate max-w-[70px]">{acc}</span>
+                                <Show when={busy()}>
+                                  {(b) => (
+                                    <span class="text-[9px] font-semibold text-[#ffbc38]">
+                                      (Busy in #{b().id})
+                                    </span>
+                                  )}
+                                </Show>
+                                <Show when={poolList().length > 1}>
+                                  <button
+                                    type="button"
+                                    class="text-[#8696a0] hover:text-[#f15c6d] p-0.5 rounded transition-colors cursor-pointer"
+                                    title={`Remove '${acc}' from campaign`}
+                                    onClick={() => removeCampaignSender(props.campaign.id, acc)}
+                                  >
+                                    <X size={10} />
+                                  </button>
+                                </Show>
+                              </span>
+                            );
+                          }}
                         </For>
                       </div>
                     </div>
