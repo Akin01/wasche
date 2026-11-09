@@ -147,12 +147,13 @@ Wasche provides an official [Model Context Protocol (MCP)](https://modelcontextp
 | `whatsapp_send_media` | `recipient`, `file_path`, `caption?`, `account_id?` | Sends an inline photo, video, or audio file (compressed by WhatsApp, max 16MB) with optional caption. |
 | `whatsapp_send_document` | `recipient`, `file_path`, `caption?`, `file_name?`, `account_id?` | Sends an uncompressed document or raw file (PDF, spreadsheet, raw 4K video/photo up to 100MB) with optional caption. |
 
-### 3. Contacts & Address Book (3 Tools)
+### 3. Contacts & Address Book (4 Tools)
 | Tool Name | Parameters | Description |
 | :--- | :--- | :--- |
 | `whatsapp_list_contacts` | `query?`, `limit?`, `account_id?` | Searches and lists contacts in the WhatsApp archive by name or phone number. |
 | `whatsapp_sync_contacts` | `account_id?` | Triggers a Peer AppState contact synchronization (`CriticalUnblockLow`) to fetch address book names from WhatsApp. |
 | `whatsapp_get_contact_avatar` | `jid`, `account_id?` | Fetches the high-resolution profile avatar picture URL for a contact JID. |
+| `whatsapp_update_contact` | `jid_or_phone`, `name` | Sets or updates custom display name for a contact in the archive (auto-deriving first name and propagating to template variables). |
 
 ### 4. Broadcast Campaigns & Anti-Ban Pacing (8 Tools)
 | Tool Name | Parameters | Description |

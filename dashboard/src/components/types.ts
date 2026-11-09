@@ -134,6 +134,7 @@ export type ActiveModal =
   | { type: 'create_campaign'; preserveState?: boolean }
   | { type: 'rename_campaign'; campaignId: number; currentName: string }
   | { type: 'rename_account'; accountId: string; currentName: string }
+  | { type: 'edit_contact'; jid: string; currentName: string }
   | { type: 'confirm'; title: string; message: string; onConfirm: () => void | Promise<void> }
   | {
       type: 'cut_video';

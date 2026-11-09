@@ -92,6 +92,7 @@ Add to your workspace `.mcp.json`:
 | **Contacts & Address Book** | `whatsapp_list_contacts` | Searches local address book contacts by name or phone number. |
 | | `whatsapp_sync_contacts` | Triggers Peer AppState contact sync (`CriticalUnblockLow`) to fetch address book names. |
 | | `whatsapp_get_contact_avatar` | Fetches high-resolution contact profile avatar picture URL. |
+| | `whatsapp_update_contact` | Sets or updates custom display name for a contact in the archive. |
 | **Broadcasts & Pacing** | `whatsapp_schedule_broadcast` | Schedules or launches an anti-ban broadcast campaign with multi-sender pooling. |
 | | `whatsapp_list_broadcasts` | Lists broadcast campaigns filtered by status or sender account. |
 | | `whatsapp_get_broadcast_status` | Retrieves real-time delivery statistics, progress counts, and logs. |

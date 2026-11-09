@@ -141,12 +141,13 @@ Wasche exposes **34 declarative tools** across 7 functional categories:
 | `whatsapp_send_media` | `recipient: string`, `file_path: string`, `caption?: string`, `account_id?: string` | Sends an immediate inline photo, video, or audio file (max 16MB) with optional caption. |
 | `whatsapp_send_document` | `recipient: string`, `file_path: string`, `caption?: string`, `file_name?: string`, `account_id?: string` | Sends an immediate document or raw uncompressed file (up to 100MB) with optional caption. |
 
-### 3. Contacts & Address Book (3 Tools)
+### 3. Contacts & Address Book (4 Tools)
 | Tool Name | Key Parameters | Operational Description |
 | :--- | :--- | :--- |
 | `whatsapp_list_contacts` | `query?: string`, `account_id?: string`, `limit?: u32` | Searches local archive contacts by name or phone with account filtering. |
 | `whatsapp_sync_contacts` | `account_id?: string` | Triggers Peer AppState Sync (`CriticalUnblockLow` snapshot replay) to fetch address book names. |
 | `whatsapp_get_contact_avatar` | `jid: string`, `account_id?: string` | Fetches the high-resolution profile avatar picture URL for a contact JID. |
+| `whatsapp_update_contact` | `jid_or_phone: string`, `name: string` | Sets or updates custom display name for a contact in the archive. |
 
 ### 4. Broadcast Campaigns & Anti-Ban Pacing (8 Tools)
 | Tool Name | Key Parameters | Operational Description |

@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [Unreleased]
+
+### Added
+- **Contact Name Editing & Derivation**:
+  - `Archive::update_contact_name`: Updates contact `full_name`, auto-derives `first_name`, updates `updated_at`, and propagates updated names immediately to queued campaign recipients.
+  - REST API `PUT /api/contacts/:jid` (and PATCH/POST) to set custom contact display names.
+  - MCP Tool `whatsapp_update_contact`: Allows AI agents to set or edit contact display names using JID or phone number.
+  - Dashboard Contacts View: Interactive inline name editing and edit pencil action in the contact table with instant reactive update.
+
+---
+
 
 ## [0.2.0] - 2026-11-06
 

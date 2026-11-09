@@ -1,8 +1,8 @@
 import { createSignal } from 'solid-js';
-import { renameCampaign, renameAccount } from '../store';
+import { renameCampaign, renameAccount, updateContactName } from '../store';
 
 export default function RenameModal(props: {
-  type: 'rename_campaign' | 'rename_account';
+  type: 'rename_campaign' | 'rename_account' | 'edit_contact';
   targetId: number | string;
   initialName: string;
   onClose: () => void;
@@ -14,8 +14,10 @@ export default function RenameModal(props: {
     if (!val) return;
     if (props.type === 'rename_campaign') {
       renameCampaign(props.targetId as number, val);
-    } else {
+    } else if (props.type === 'rename_account') {
       renameAccount(props.targetId as string, val);
+    } else {
+      updateContactName(props.targetId as string, val);
     }
     props.onClose();
   };
@@ -24,7 +26,7 @@ export default function RenameModal(props: {
     <div class="space-y-4">
       <div>
         <label class="block text-xs font-semibold uppercase tracking-wider text-[#8696a0] mb-1.5">
-          New Name / Identifier
+          {props.type === 'edit_contact' ? 'Contact Display Name' : 'New Name / Identifier'}
         </label>
         <input
           type="text"

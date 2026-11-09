@@ -649,6 +649,67 @@ impl WebDashboard {
                 }
             }
             ("404 Not Found", "text/plain", b"Avatar not found".to_vec())
+        } else if (method == "PUT" || method == "PATCH" || method == "POST")
+            && path.starts_with("/api/contacts/")
+            && !path.ends_with("/avatar")
+            && !path.ends_with("/avatar-image")
+            && !path.ends_with("/sync")
+        {
+            let jid_raw = path.trim_start_matches("/api/contacts/");
+            let clean_jid = percent_decode_str(jid_raw);
+            if clean_jid.is_empty() {
+                return (
+                    "400 Bad Request",
+                    "application/json",
+                    br#"{"error":"Contact JID or identifier is required"}"#.to_vec(),
+                );
+            }
+            let name = if let Some(body_start) = request_str.split("\r\n\r\n").nth(1) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(body_start) {
+                    val.get("name")
+                        .or_else(|| val.get("full_name"))
+                        .and_then(|v| v.as_str())
+                        .map(ToString::to_string)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let name_str = match name {
+                Some(n) => n,
+                None => {
+                    return (
+                        "400 Bad Request",
+                        "application/json",
+                        br#"{"error":"'name' field is required in request body"}"#.to_vec(),
+                    );
+                }
+            };
+
+            match self
+                .sidecar
+                .archive()
+                .update_contact_name(&clean_jid, &name_str)
+            {
+                Ok(_) => {
+                    let res = serde_json::json!({
+                        "success": true,
+                        "jid": clean_jid,
+                        "name": name_str.trim()
+                    });
+                    let json = serde_json::to_vec(&res).unwrap_or_else(|_| b"{}".to_vec());
+                    ("200 OK", "application/json", json)
+                }
+                Err(e) => {
+                    let res = serde_json::json!({
+                        "error": format!("Failed to update contact: {}", e)
+                    });
+                    let json = serde_json::to_vec(&res).unwrap_or_else(|_| b"{}".to_vec());
+                    ("500 Internal Server Error", "application/json", json)
+                }
+            }
         } else if method == "POST" && path == "/api/contacts/sync" {
             let account_id = uri.split('?').nth(1).and_then(|q| {
                 q.split('&')
