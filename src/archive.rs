@@ -1,7 +1,7 @@
 //! Persistent SQLite storage for campaigns, recipient queues, and contacts.
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS contacts (
     push_name TEXT,
     phone_number TEXT,
     avatar_url TEXT,
+    is_custom_name INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL DEFAULT 0
 );
 
@@ -290,6 +291,10 @@ impl Archive {
             [],
         );
         let _ = connection.execute("ALTER TABLE contacts ADD COLUMN avatar_url TEXT", []);
+        let _ = connection.execute(
+            "ALTER TABLE contacts ADD COLUMN is_custom_name INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         let _ = connection.execute(
             "UPDATE broadcast_recipients SET status = 'queued', claimed_at = NULL, claimed_by = NULL WHERE status = 'typing'",
             [],
@@ -1596,13 +1601,13 @@ impl Archive {
     pub fn upsert_contact(&self, contact: &Contact) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO contacts (id, full_name, first_name, push_name, phone_number, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO contacts (id, full_name, first_name, push_name, phone_number, is_custom_name, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)
              ON CONFLICT(id) DO UPDATE SET
-                full_name = coalesce(excluded.full_name, full_name),
-                first_name = coalesce(excluded.first_name, first_name),
-                push_name = coalesce(excluded.push_name, push_name),
-                phone_number = coalesce(excluded.phone_number, phone_number),
+                full_name = CASE WHEN contacts.is_custom_name = 1 THEN contacts.full_name ELSE coalesce(excluded.full_name, contacts.full_name) END,
+                first_name = CASE WHEN contacts.is_custom_name = 1 THEN contacts.first_name ELSE coalesce(excluded.first_name, contacts.first_name) END,
+                push_name = coalesce(excluded.push_name, contacts.push_name),
+                phone_number = coalesce(excluded.phone_number, contacts.phone_number),
                 updated_at = excluded.updated_at",
             params![
                 contact.id,
@@ -1932,9 +1937,10 @@ impl Archive {
             .unwrap_or_default()
             .as_secs() as i64;
 
+        let is_custom = if trimmed_name.is_empty() { 0 } else { 1 };
         let rows = conn.execute(
-            "UPDATE contacts SET full_name = ?1, first_name = ?2, updated_at = ?3 WHERE id = ?4 OR phone_number = ?4",
-            params![full_name, first_name, now, target],
+            "UPDATE contacts SET full_name = ?1, first_name = ?2, is_custom_name = ?3, updated_at = ?4 WHERE id = ?5 OR phone_number = ?5",
+            params![full_name, first_name, is_custom, now, target],
         )?;
 
         let (target_id, phone_number) = if target.contains('@') {
@@ -1965,9 +1971,9 @@ impl Archive {
 
         if rows == 0 {
             conn.execute(
-                "INSERT INTO contacts (id, full_name, first_name, push_name, phone_number, updated_at)
-                 VALUES (?1, ?2, ?3, NULL, ?4, ?5)",
-                params![target_id, full_name, first_name, phone_number, now],
+                "INSERT INTO contacts (id, full_name, first_name, push_name, phone_number, is_custom_name, updated_at)
+                 VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6)",
+                params![target_id, full_name, first_name, phone_number, is_custom, now],
             )?;
         }
 
@@ -2128,5 +2134,23 @@ mod tests {
         assert_eq!(c2.full_name.as_deref(), Some("Jane Doe"));
         assert_eq!(c2.first_name.as_deref(), Some("Jane"));
         assert_eq!(c2.id, "1999888777@s.whatsapp.net");
+
+        // 6. Verify WhatsApp background sync (upsert_contact) does NOT overwrite custom edited name
+        archive
+            .upsert_contact(&Contact {
+                id: jid.to_string(),
+                full_name: Some("Overwritten By WhatsApp".to_string()),
+                first_name: Some("Overwritten".to_string()),
+                push_name: Some("new_push_name".to_string()),
+                phone_number: Some(phone.to_string()),
+                avatar_url: None,
+                updated_at: 5000,
+            })
+            .unwrap();
+
+        let preserved = archive.get_contact(jid).unwrap().unwrap();
+        assert_eq!(preserved.full_name.as_deref(), Some("Budi Santoso"));
+        assert_eq!(preserved.first_name.as_deref(), Some("Budi"));
+        assert_eq!(preserved.push_name.as_deref(), Some("new_push_name"));
     }
 }
