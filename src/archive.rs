@@ -537,6 +537,115 @@ impl Archive {
         })
     }
 
+    pub fn get_conflicting_running_senders(
+        &self,
+        target_campaign_id: i64,
+        target_accounts: &[String],
+    ) -> Result<Vec<(String, i64, String)>> {
+        let mut managed_accounts = self.get_managed_accounts().unwrap_or_default();
+        if managed_accounts.is_empty() {
+            managed_accounts.push("default".to_string());
+        }
+
+        let mut target_is_all = false;
+        let mut target_list: Vec<String> = Vec::new();
+        for item in target_accounts {
+            if item.trim().eq_ignore_ascii_case("all") {
+                target_is_all = true;
+            } else {
+                for part in item.split(',') {
+                    let clean = part.trim();
+                    if !clean.is_empty()
+                        && !target_list.iter().any(|a| a.eq_ignore_ascii_case(clean))
+                    {
+                        target_list.push(clean.to_string());
+                    }
+                }
+            }
+        }
+        if target_is_all {
+            for m in &managed_accounts {
+                if !target_list.iter().any(|a| a.eq_ignore_ascii_case(m)) {
+                    target_list.push(m.clone());
+                }
+            }
+        }
+        if target_list.is_empty() {
+            target_list.push("default".to_string());
+        }
+
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, account_id, name FROM broadcast_campaigns WHERE status = 'running' AND id != ?1",
+        )?;
+
+        let rows = stmt.query_map(params![target_campaign_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+
+        let mut conflicts: Vec<(String, i64, String)> = Vec::new();
+        for r in rows {
+            let (other_id, other_account_str, other_name) = r?;
+            let mut other_is_all = false;
+            let mut other_list: Vec<String> = Vec::new();
+            if other_account_str.trim().eq_ignore_ascii_case("all") {
+                other_is_all = true;
+                other_list = managed_accounts.clone();
+            } else {
+                for part in other_account_str.split(',') {
+                    let clean = part.trim();
+                    if !clean.is_empty()
+                        && !other_list.iter().any(|a| a.eq_ignore_ascii_case(clean))
+                    {
+                        other_list.push(clean.to_string());
+                    }
+                }
+            }
+            if other_list.is_empty() {
+                other_list.push("default".to_string());
+            }
+
+            if target_is_all || other_is_all {
+                let overlapping: Vec<String> = if target_is_all && other_is_all {
+                    managed_accounts.clone()
+                } else if target_is_all {
+                    other_list
+                } else {
+                    target_list.clone()
+                };
+
+                for acc in overlapping {
+                    if !conflicts
+                        .iter()
+                        .any(|(a, id, _)| a.eq_ignore_ascii_case(&acc) && *id == other_id)
+                    {
+                        conflicts.push((acc, other_id, other_name.clone()));
+                    }
+                }
+            } else {
+                for t_acc in &target_list {
+                    if other_list
+                        .iter()
+                        .any(|o_acc| o_acc.eq_ignore_ascii_case(t_acc))
+                    {
+                        if !conflicts
+                            .iter()
+                            .any(|(a, id, _)| a.eq_ignore_ascii_case(t_acc) && *id == other_id)
+                        {
+                            conflicts.push((t_acc.clone(), other_id, other_name.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(conflicts)
+    }
+
     pub fn update_campaign_status(&self, campaign_id: i64, status: &str, now: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -1109,12 +1218,12 @@ impl Archive {
         let tx = conn.transaction()?;
 
         // 1. Strict Sender Mutual Exclusion: An account can only simulate typing and send to ONE recipient at a time.
-        // If this account (or a single-sender campaign) already holds an in-flight recipient in 'typing', refuse to claim another!
+        // If this account holds an in-flight recipient in 'typing' across any campaign, refuse to claim another!
         let is_account_typing: bool = tx
             .query_row(
                 "SELECT COUNT(*) > 0 FROM broadcast_recipients 
-                 WHERE campaign_id = ?1 AND status = 'typing' AND (claimed_by = ?2 OR claimed_by IS NULL)",
-                params![campaign_id, account_id],
+                 WHERE status = 'typing' AND (claimed_by = ?1 OR claimed_by IS NULL)",
+                params![account_id],
                 |row| row.get(0),
             )
             .unwrap_or(false);
@@ -1495,28 +1604,129 @@ impl Archive {
 
     pub fn promote_due_scheduled_campaigns(&self, now: i64) -> Result<Vec<i64>> {
         let mut conn = self.conn.lock().unwrap();
-        let ids: Vec<i64> = {
+        let due_campaigns: Vec<(i64, String, String)> = {
             let mut stmt = conn.prepare(
-                "SELECT id FROM broadcast_campaigns 
-                 WHERE status = 'scheduled' AND scheduled_at IS NOT NULL AND scheduled_at <= ?1",
+                "SELECT id, account_id, name FROM broadcast_campaigns 
+                 WHERE status = 'scheduled' AND scheduled_at IS NOT NULL AND scheduled_at <= ?1
+                 ORDER BY scheduled_at ASC, id ASC",
             )?;
-            stmt.query_map(params![now], |row| row.get(0))?
+            stmt.query_map(params![now], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        if due_campaigns.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut active_running: Vec<(i64, String, String)> = {
+            let mut running_stmt = conn.prepare(
+                "SELECT id, account_id, name FROM broadcast_campaigns WHERE status = 'running'",
+            )?;
+            running_stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
 
-        if ids.is_empty() {
-            return Ok(ids);
+        let mut managed_accounts: Vec<String> = {
+            let mut managed_accounts_stmt =
+                conn.prepare("SELECT account_id FROM managed_accounts ORDER BY created_at ASC")?;
+            managed_accounts_stmt
+                .query_map([], |row| row.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap_or_default()
+        };
+        if managed_accounts.is_empty() {
+            managed_accounts.push("default".to_string());
         }
 
+        let mut promoted_ids = Vec::new();
         let tx = conn.transaction()?;
-        for id in &ids {
+
+        for (id, account_id_str, name) in due_campaigns {
+            let target_is_all = account_id_str.trim().eq_ignore_ascii_case("all");
+            let mut target_accounts: Vec<String> = if target_is_all {
+                managed_accounts.clone()
+            } else {
+                account_id_str
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            };
+            if target_accounts.is_empty() {
+                target_accounts.push("default".to_string());
+            }
+
+            let mut has_conflict = false;
+            for (r_id, r_acc_str, r_name) in &active_running {
+                let r_is_all = r_acc_str.trim().eq_ignore_ascii_case("all");
+                let mut r_accounts: Vec<String> = if r_is_all {
+                    managed_accounts.clone()
+                } else {
+                    r_acc_str
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                };
+                if r_accounts.is_empty() {
+                    r_accounts.push("default".to_string());
+                }
+
+                if target_is_all || r_is_all {
+                    let conflict_acc = if target_is_all && r_is_all {
+                        managed_accounts
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| "default".to_string())
+                    } else if target_is_all {
+                        r_accounts
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| "default".to_string())
+                    } else {
+                        target_accounts
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| "default".to_string())
+                    };
+                    warn!(
+                        "Scheduled campaign #{} ('{}') deferred: sender account '{}' is currently active in campaign #{} ('{}')",
+                        id, name, conflict_acc, r_id, r_name
+                    );
+                    has_conflict = true;
+                    break;
+                } else {
+                    if let Some(matched_acc) = target_accounts
+                        .iter()
+                        .find(|t| r_accounts.iter().any(|r| r.eq_ignore_ascii_case(t)))
+                    {
+                        warn!(
+                            "Scheduled campaign #{} ('{}') deferred: sender account '{}' is currently active in campaign #{} ('{}')",
+                            id, name, matched_acc, r_id, r_name
+                        );
+                        has_conflict = true;
+                        break;
+                    }
+                }
+            }
+
+            if has_conflict {
+                continue;
+            }
+
             tx.execute(
                 "UPDATE broadcast_campaigns SET status = 'running', updated_at = ?1 WHERE id = ?2",
                 params![now, id],
             )?;
+            promoted_ids.push(id);
+            active_running.push((id, account_id_str, name));
         }
+
         tx.commit()?;
-        Ok(ids)
+        Ok(promoted_ids)
     }
 
     pub fn list_recipients_for_campaign(

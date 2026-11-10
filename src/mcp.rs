@@ -49,7 +49,12 @@ impl WascheMcpServer {
             .bridge_port
             .ok_or_else(|| "Not in bridge mode".to_string())?;
         let url = format!("http://127.0.0.1:{}{}", port, path);
-        let mut resp = ureq::get(&url)
+        let agent: ureq::Agent = ureq::config::Config::builder()
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut resp = agent
+            .get(&url)
             .call()
             .map_err(|e| format!("Daemon communication failed: {}", e))?;
         let mut bytes = Vec::new();
@@ -57,6 +62,17 @@ impl WascheMcpServer {
             .as_reader()
             .read_to_end(&mut bytes)
             .map_err(|e| e.to_string())?;
+        if resp.status().is_client_error() || resp.status().is_server_error() {
+            if let Some(err) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                .ok()
+                .and_then(|val| val.get("error")?.as_str().map(ToString::to_string))
+            {
+                return Err(err);
+            }
+            return Err(
+                String::from_utf8(bytes).unwrap_or_else(|_| format!("HTTP {}", resp.status()))
+            );
+        }
         String::from_utf8(bytes).map_err(|e| e.to_string())
     }
 
@@ -67,7 +83,12 @@ impl WascheMcpServer {
             .ok_or_else(|| "Not in bridge mode".to_string())?;
         let url = format!("http://127.0.0.1:{}{}", port, path);
         let bytes = serde_json::to_vec(body).map_err(|e| e.to_string())?;
-        let mut resp = ureq::post(&url)
+        let agent: ureq::Agent = ureq::config::Config::builder()
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut resp = agent
+            .post(&url)
             .content_type("application/json")
             .send(bytes.as_slice())
             .map_err(|e| format!("Daemon communication failed: {}", e))?;
@@ -76,6 +97,17 @@ impl WascheMcpServer {
             .as_reader()
             .read_to_end(&mut out)
             .map_err(|e| e.to_string())?;
+        if resp.status().is_client_error() || resp.status().is_server_error() {
+            if let Some(err) = serde_json::from_slice::<serde_json::Value>(&out)
+                .ok()
+                .and_then(|val| val.get("error")?.as_str().map(ToString::to_string))
+            {
+                return Err(err);
+            }
+            return Err(
+                String::from_utf8(out).unwrap_or_else(|_| format!("HTTP {}", resp.status()))
+            );
+        }
         String::from_utf8(out).map_err(|e| e.to_string())
     }
 
@@ -85,7 +117,12 @@ impl WascheMcpServer {
             .bridge_port
             .ok_or_else(|| "Not in bridge mode".to_string())?;
         let url = format!("http://127.0.0.1:{}{}", port, path);
-        let mut resp = ureq::post(&url)
+        let agent: ureq::Agent = ureq::config::Config::builder()
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut resp = agent
+            .post(&url)
             .send(&[])
             .map_err(|e| format!("Daemon communication failed: {}", e))?;
         let mut out = Vec::new();
@@ -93,6 +130,17 @@ impl WascheMcpServer {
             .as_reader()
             .read_to_end(&mut out)
             .map_err(|e| e.to_string())?;
+        if resp.status().is_client_error() || resp.status().is_server_error() {
+            if let Some(err) = serde_json::from_slice::<serde_json::Value>(&out)
+                .ok()
+                .and_then(|val| val.get("error")?.as_str().map(ToString::to_string))
+            {
+                return Err(err);
+            }
+            return Err(
+                String::from_utf8(out).unwrap_or_else(|_| format!("HTTP {}", resp.status()))
+            );
+        }
         String::from_utf8(out).map_err(|e| e.to_string())
     }
 }

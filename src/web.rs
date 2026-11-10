@@ -1405,11 +1405,17 @@ impl WebDashboard {
                             "application/json",
                             format!(r#"{{"success":true,"account_id":"{}"}}"#, pool).into_bytes(),
                         ),
-                        Err(e) => (
-                            "400 Bad Request",
-                            "application/json",
-                            format!(r#"{{"error":"{}"}}"#, e).into_bytes(),
-                        ),
+                        Err(e) => {
+                            let err_msg = e.to_string();
+                            let status = if err_msg.contains("currently active in campaign") {
+                                "409 Conflict"
+                            } else {
+                                "400 Bad Request"
+                            };
+                            let body = serde_json::to_vec(&serde_json::json!({ "error": err_msg }))
+                                .unwrap_or_default();
+                            (status, "application/json", body)
+                        }
                     }
                 } else {
                     (
@@ -2727,11 +2733,17 @@ impl WebDashboard {
                             format!(r#"{{"success":true,"id":{},"action":"{}"}}"#, id, action)
                                 .into_bytes(),
                         ),
-                        Err(e) => (
-                            "400 Bad Request",
-                            "application/json",
-                            format!(r#"{{"error":"{}"}}"#, e).into_bytes(),
-                        ),
+                        Err(e) => {
+                            let err_msg = e.to_string();
+                            let status = if err_msg.contains("currently active in campaign") {
+                                "409 Conflict"
+                            } else {
+                                "400 Bad Request"
+                            };
+                            let body = serde_json::to_vec(&serde_json::json!({ "error": err_msg }))
+                                .unwrap_or_default();
+                            (status, "application/json", body)
+                        }
                     }
                 } else {
                     (

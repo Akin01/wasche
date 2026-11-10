@@ -257,6 +257,50 @@ export async function controlCampaign(
       setSelectedRunId(null);
       setDetailTab('runs');
     }
+    if (
+      action === 'rerun' ||
+      action === 'retry_failed' ||
+      action === 'resume' ||
+      action === 'resend_aborted'
+    ) {
+      const targetCamp = campaigns().find((c) => c.id === id);
+      if (targetCamp) {
+        const isAll = targetCamp.account_id.trim().toLowerCase() === 'all';
+        const targetAccounts = isAll
+          ? accounts().map((a) => a.account_id.toLowerCase())
+          : targetCamp.account_id
+              .split(',')
+              .map((s) => s.trim().toLowerCase())
+              .filter(Boolean);
+
+        for (const other of campaigns()) {
+          if (other.status === 'running' && other.id !== id) {
+            const otherIsAll = other.account_id.trim().toLowerCase() === 'all';
+            const otherAccounts = otherIsAll
+              ? accounts().map((a) => a.account_id.toLowerCase())
+              : other.account_id
+                  .split(',')
+                  .map((s) => s.trim().toLowerCase())
+                  .filter(Boolean);
+
+            let conflictAccount: string | null = null;
+            if (isAll || otherIsAll) {
+              conflictAccount = isAll ? targetAccounts[0] || 'all' : otherAccounts[0] || 'all';
+            } else {
+              conflictAccount = targetAccounts.find((t) => otherAccounts.includes(t)) || null;
+            }
+
+            if (conflictAccount) {
+              showToast(
+                `Cannot start campaign #${id}: sender account '${conflictAccount}' is currently active in campaign #${other.id} ('${other.name}'). Pause or complete the existing campaign first.`,
+                'error'
+              );
+              return;
+            }
+          }
+        }
+      }
+    }
     const res = await fetch(`/api/control/${id}/${action}`, { method: 'POST' });
     const data = await res.json();
     if (data.success) {
@@ -331,6 +375,30 @@ export async function updateCampaignTemplate(id: number, template: string) {
 
 export async function addCampaignSender(campaignId: number, accountId: string) {
   try {
+    const targetCamp = campaigns().find((c) => c.id === campaignId);
+    if (targetCamp && targetCamp.status === 'running') {
+      const cleanAcc = accountId.trim().toLowerCase();
+      const isAll = cleanAcc === 'all';
+      for (const other of campaigns()) {
+        if (other.status === 'running' && other.id !== campaignId) {
+          const otherIsAll = other.account_id.trim().toLowerCase() === 'all';
+          const otherAccounts = otherIsAll
+            ? accounts().map((a) => a.account_id.toLowerCase())
+            : other.account_id
+                .split(',')
+                .map((s) => s.trim().toLowerCase())
+                .filter(Boolean);
+
+          if (isAll || otherIsAll || otherAccounts.includes(cleanAcc)) {
+            showToast(
+              `Cannot add sender '${accountId}' to running campaign #${campaignId}: account is currently active in campaign #${other.id} ('${other.name}').`,
+              'error'
+            );
+            return;
+          }
+        }
+      }
+    }
     const res = await fetch(`/api/campaigns/${campaignId}/senders/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
