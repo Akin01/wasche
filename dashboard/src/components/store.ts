@@ -898,3 +898,39 @@ export async function syncContacts() {
     showToast(`Error syncing contacts: ${msg}`, 'error');
   }
 }
+
+export async function updateContactName(jid: string, name: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/contacts/${encodeURIComponent(jid)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    const data = await res.json();
+    if (res.ok && data.success !== false) {
+      showToast('Contact name updated successfully', 'success');
+      const trimmed = name.trim();
+      const firstName = trimmed.split(/\s+/)[0] || trimmed;
+      setContacts((prev) =>
+        prev.map((c) => {
+          if (c.jid === jid || c.id === jid || c.phone_number === jid) {
+            return {
+              ...c,
+              full_name: trimmed,
+              first_name: firstName
+            };
+          }
+          return c;
+        })
+      );
+      return true;
+    } else {
+      showToast(data.error || 'Failed to update contact name', 'error');
+      return false;
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`Error updating contact: ${msg}`, 'error');
+    return false;
+  }
+}

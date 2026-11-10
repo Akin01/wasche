@@ -11,10 +11,11 @@ import {
   accounts,
   fetchContacts,
   syncContacts,
-  setActiveModal
+  setActiveModal,
+  updateContactName
 } from './store';
 import { getAccountStatusState } from './types';
-import { Users, Search, RefreshCw, Send, Smartphone, ChevronDown, Check } from 'lucide-solid';
+import { Users, Search, RefreshCw, Send, Smartphone, ChevronDown, Check, Pencil, X } from 'lucide-solid';
 export default function ContactsView() {
   let searchTimer: any;
   const handleSearch = (e: InputEvent & { currentTarget: HTMLInputElement }) => {
@@ -24,6 +25,25 @@ export default function ContactsView() {
     searchTimer = setTimeout(() => {
       fetchContacts(q, selectedAccountForContacts());
     }, 250);
+  };
+  const [editingJid, setEditingJid] = createSignal<string | null>(null);
+  const [editingName, setEditingName] = createSignal('');
+
+  const handleStartEdit = (jid: string, currentName: string) => {
+    setEditingJid(jid);
+    setEditingName(currentName);
+  };
+
+  const handleSaveEdit = async (jid: string) => {
+    const newName = editingName().trim();
+    if (!newName) {
+      setEditingJid(null);
+      return;
+    }
+    const ok = await updateContactName(jid, newName);
+    if (ok) {
+      setEditingJid(null);
+    }
   };
 
   const handleTableScroll = (e: Event) => {
@@ -272,16 +292,73 @@ export default function ContactsView() {
                                 .toUpperCase()}
                             </div>
                           </div>
-                          <div>
-                            <strong class="text-xs text-text-main block">
-                              {c.full_name ||
-                                c.first_name ||
-                                c.push_name ||
-                                c.business_name ||
-                                'Unknown Contact'}
-                            </strong>
+                          <div class="flex-1 min-w-0">
+                            <Show
+                              when={editingJid() === (c.jid || c.id)}
+                              fallback={
+                                <div class="flex items-center gap-1.5 group">
+                                  <strong class="text-xs text-text-main block truncate">
+                                    {c.full_name ||
+                                      c.first_name ||
+                                      c.push_name ||
+                                      c.business_name ||
+                                      'Unknown Contact'}
+                                  </strong>
+                                  <button
+                                    type="button"
+                                    style={{
+                                      border: 'none',
+                                      background: 'transparent',
+                                      padding: '0'
+                                    }}
+                                    class="text-text-muted hover:text-accent opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer p-0.5 flex items-center shrink-0"
+                                    title="Edit contact name"
+                                    onClick={() =>
+                                      handleStartEdit(
+                                        c.jid || c.id || '',
+                                        c.full_name || c.first_name || c.push_name || ''
+                                      )
+                                    }
+                                  >
+                                    <Pencil size={12} />
+                                  </button>
+                                </div>
+                              }
+                            >
+                              <div class="flex items-center gap-1.5">
+                                <input
+                                  type="text"
+                                  class="bg-[#111b21] border border-accent rounded-lg px-2 py-0.5 text-xs text-text-main focus:outline-none focus:ring-1 focus:ring-accent min-w-35"
+                                  value={editingName()}
+                                  onInput={(e) => setEditingName(e.currentTarget.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleSaveEdit(c.jid || c.id || '');
+                                    if (e.key === 'Escape') setEditingJid(null);
+                                  }}
+                                  autofocus
+                                />
+                                <button
+                                  type="button"
+                                  style={{ border: 'none', background: 'transparent' }}
+                                  class="text-accent hover:text-[#06cf9c] cursor-pointer p-1"
+                                  title="Save Name"
+                                  onClick={() => handleSaveEdit(c.jid || c.id || '')}
+                                >
+                                  <Check size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  style={{ border: 'none', background: 'transparent' }}
+                                  class="text-text-muted hover:text-text-main cursor-pointer p-1"
+                                  title="Cancel"
+                                  onClick={() => setEditingJid(null)}
+                                >
+                                  <X size={13} />
+                                </button>
+                              </div>
+                            </Show>
                             <Show when={c.business_name}>
-                              <span class="text-[10px] text-text-muted">{c.business_name}</span>
+                              <span class="text-[10px] text-text-muted block truncate">{c.business_name}</span>
                             </Show>
                           </div>
                         </div>
@@ -299,19 +376,33 @@ export default function ContactsView() {
                         <span class="text-xs font-mono text-text-muted">{c.jid}</span>
                       </td>
                       <td style={{ 'text-align': 'right' }}>
-                        <button
-                          class="token-chip-btn"
-                          title="Send Direct WhatsApp Message"
-                          onClick={() =>
-                            setActiveModal({
-                              type: 'direct_message',
-                              jid: c.jid,
-                              name: c.full_name || c.phone_number || c.jid
-                            })
-                          }
-                        >
-                          <Send size={13} />
-                        </button>
+                        <div class="flex items-center justify-end gap-1.5">
+                          <button
+                            class="token-chip-btn"
+                            title="Edit Contact Name"
+                            onClick={() =>
+                              handleStartEdit(
+                                c.jid || c.id || '',
+                                c.full_name || c.first_name || c.push_name || ''
+                              )
+                            }
+                          >
+                            <Pencil size={13} />
+                          </button>
+                          <button
+                            class="token-chip-btn"
+                            title="Send Direct WhatsApp Message"
+                            onClick={() =>
+                              setActiveModal({
+                                type: 'direct_message',
+                                jid: c.jid,
+                                name: c.full_name || c.phone_number || c.jid
+                              })
+                            }
+                          >
+                            <Send size={13} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   )}

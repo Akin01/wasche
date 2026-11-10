@@ -213,6 +213,80 @@ async fn test_mcp_contacts_list() {
 }
 
 #[tokio::test]
+async fn test_mcp_update_contact() {
+    let dir = tempdir().unwrap();
+    let archive_path = dir.path().join("archive.db");
+
+    let archive = Archive::open(archive_path).unwrap();
+    let account_manager = AccountManager::init(dir.path().to_path_buf(), archive.clone())
+        .await
+        .unwrap();
+    let (sidecar_handle, _worker) = SidecarHandle::new(archive.clone(), account_manager.clone());
+    let server = WascheMcpServer::new(account_manager, Arc::new(sidecar_handle));
+
+    // Update contact name via MCP
+    let res = server
+        .whatsapp_update_contact(Parameters(UpdateContactParams {
+            jid_or_phone: "+628987654321".to_string(),
+            name: "Budi Santoso".to_string(),
+        }))
+        .await
+        .unwrap();
+
+    assert!(res.contains("Budi Santoso"));
+
+    // Verify contact in archive
+    let contact = archive.get_contact("+628987654321").unwrap().unwrap();
+    assert_eq!(contact.full_name.as_deref(), Some("Budi Santoso"));
+    assert_eq!(contact.first_name.as_deref(), Some("Budi"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_web_put_contact_name() {
+    let dir = tempdir().unwrap();
+    let archive_path = dir.path().join("archive.db");
+
+    let archive = Archive::open(archive_path).unwrap();
+    let account_manager = AccountManager::init(dir.path().to_path_buf(), archive.clone())
+        .await
+        .unwrap();
+    let (sidecar_handle, _worker) = SidecarHandle::new(archive.clone(), account_manager.clone());
+
+    let web = Arc::new(wasche::web::WebDashboard::new(
+        account_manager,
+        Arc::new(sidecar_handle),
+        13888,
+        dir.path().to_path_buf(),
+    ));
+
+    let bound_port = web.start().await.unwrap();
+
+    let body = serde_json::to_vec(&serde_json::json!({ "name": "Ahmad Yani" })).unwrap();
+    let status = tokio::task::spawn_blocking(move || {
+        let resp = ureq::put(&format!(
+            "http://127.0.0.1:{}/api/contacts/628111222333@s.whatsapp.net",
+            bound_port
+        ))
+        .content_type("application/json")
+        .send(body.as_slice())
+        .unwrap();
+        resp.status()
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(status, 200);
+
+    // Verify contact in archive
+    let contact = archive
+        .get_contact("628111222333@s.whatsapp.net")
+        .unwrap()
+        .unwrap();
+    assert_eq!(contact.full_name.as_deref(), Some("Ahmad Yani"));
+    assert_eq!(contact.first_name.as_deref(), Some("Ahmad"));
+}
+
+#[tokio::test]
 async fn test_mcp_bridge_mode_instantiation() {
     let bridge_server = WascheMcpServer::new_bridge(3030);
     let dashboard_res = bridge_server.whatsapp_open_dashboard().await.unwrap();

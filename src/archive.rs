@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS contacts (
     push_name TEXT,
     phone_number TEXT,
     avatar_url TEXT,
+    is_custom_name INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL DEFAULT 0
 );
 
@@ -290,6 +291,10 @@ impl Archive {
             [],
         );
         let _ = connection.execute("ALTER TABLE contacts ADD COLUMN avatar_url TEXT", []);
+        let _ = connection.execute(
+            "ALTER TABLE contacts ADD COLUMN is_custom_name INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         let _ = connection.execute(
             "UPDATE broadcast_recipients SET status = 'queued', claimed_at = NULL, claimed_by = NULL WHERE status = 'typing'",
             [],
@@ -1806,13 +1811,13 @@ impl Archive {
     pub fn upsert_contact(&self, contact: &Contact) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO contacts (id, full_name, first_name, push_name, phone_number, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO contacts (id, full_name, first_name, push_name, phone_number, is_custom_name, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)
              ON CONFLICT(id) DO UPDATE SET
-                full_name = coalesce(excluded.full_name, full_name),
-                first_name = coalesce(excluded.first_name, first_name),
-                push_name = coalesce(excluded.push_name, push_name),
-                phone_number = coalesce(excluded.phone_number, phone_number),
+                full_name = CASE WHEN contacts.is_custom_name = 1 THEN contacts.full_name ELSE coalesce(excluded.full_name, contacts.full_name) END,
+                first_name = CASE WHEN contacts.is_custom_name = 1 THEN contacts.first_name ELSE coalesce(excluded.first_name, contacts.first_name) END,
+                push_name = coalesce(excluded.push_name, contacts.push_name),
+                phone_number = coalesce(excluded.phone_number, contacts.phone_number),
                 updated_at = excluded.updated_at",
             params![
                 contact.id,
@@ -2113,6 +2118,85 @@ impl Archive {
         )?;
         Ok(())
     }
+
+    pub fn get_contact(&self, jid_or_phone: &str) -> Result<Option<Contact>> {
+        let conn = self.conn.lock().unwrap();
+        let target = jid_or_phone.trim();
+        let mut stmt = conn.prepare(
+            "SELECT id, full_name, first_name, push_name, phone_number, avatar_url, updated_at
+             FROM contacts
+             WHERE id = ?1 OR phone_number = ?1 LIMIT 1",
+        )?;
+        stmt.query_row(params![target], Self::map_contact_row)
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn update_contact_name(&self, jid_or_phone: &str, name: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let target = jid_or_phone.trim();
+        let trimmed_name = name.trim();
+        let (full_name, first_name) = if trimmed_name.is_empty() {
+            (None, None)
+        } else {
+            (Some(trimmed_name), trimmed_name.split_whitespace().next())
+        };
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let is_custom = if trimmed_name.is_empty() { 0 } else { 1 };
+        let rows = conn.execute(
+            "UPDATE contacts SET full_name = ?1, first_name = ?2, is_custom_name = ?3, updated_at = ?4 WHERE id = ?5 OR phone_number = ?5",
+            params![full_name, first_name, is_custom, now, target],
+        )?;
+
+        let (target_id, phone_number) = if target.contains('@') {
+            let digits: String = target
+                .split('@')
+                .next()
+                .unwrap_or("")
+                .chars()
+                .filter(|c| c.is_ascii_digit())
+                .collect();
+            let phone = if !digits.is_empty() {
+                Some(format!("+{}", digits))
+            } else {
+                None
+            };
+            (target.to_string(), phone)
+        } else {
+            let digits: String = target.chars().filter(|c| c.is_ascii_digit()).collect();
+            let phone = if target.starts_with('+') {
+                target.to_string()
+            } else if !digits.is_empty() {
+                format!("+{}", digits)
+            } else {
+                target.to_string()
+            };
+            (format!("{}@s.whatsapp.net", digits), Some(phone))
+        };
+
+        if rows == 0 {
+            conn.execute(
+                "INSERT INTO contacts (id, full_name, first_name, push_name, phone_number, is_custom_name, updated_at)
+                 VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6)",
+                params![target_id, full_name, first_name, phone_number, is_custom, now],
+            )?;
+        }
+
+        // Also update any queued broadcast recipients for this contact to ensure immediate template propagation
+        let _ = conn.execute(
+            "UPDATE broadcast_recipients
+             SET display_name = ?1
+             WHERE (jid = ?2 OR phone_number = ?2 OR jid = ?3 OR phone_number = ?3) AND status = 'queued'",
+            params![full_name, target, target_id],
+        );
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -2176,5 +2260,107 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(r2.display_name.as_deref(), Some("Bob"));
+    }
+
+    #[test]
+    fn test_update_contact_name_and_template_propagation() {
+        let archive = Archive::in_memory().unwrap();
+        let jid = "628123456789@s.whatsapp.net";
+        let phone = "+628123456789";
+
+        // 1. Initial insert via upsert_contact
+        archive
+            .upsert_contact(&Contact {
+                id: jid.to_string(),
+                full_name: None,
+                first_name: None,
+                push_name: Some("Budi WhatsApp".to_string()),
+                phone_number: Some(phone.to_string()),
+                avatar_url: None,
+                updated_at: 100,
+            })
+            .unwrap();
+
+        // Verify initial state
+        let contact = archive.get_contact(jid).unwrap().unwrap();
+        assert_eq!(contact.full_name, None);
+        assert_eq!(contact.first_name, None);
+
+        // 2. Create campaign with queued recipient without display_name
+        let campaign_id = archive
+            .create_campaign(
+                "default",
+                "Promo Campaign",
+                "Halo {{name}}, sapaan akrab {first_name}!",
+                None,
+                10,
+                20,
+                None,
+                1000,
+            )
+            .unwrap();
+        archive
+            .add_recipients(
+                campaign_id,
+                &[NewRecipient {
+                    jid: jid.to_string(),
+                    phone_number: phone.to_string(),
+                    display_name: None,
+                    custom_fields_json: None,
+                }],
+            )
+            .unwrap();
+
+        // 3. Update contact name to "Budi Santoso"
+        archive.update_contact_name(jid, "Budi Santoso").unwrap();
+
+        // Verify contact updated and first_name derived
+        let updated = archive.get_contact(jid).unwrap().unwrap();
+        assert_eq!(updated.full_name.as_deref(), Some("Budi Santoso"));
+        assert_eq!(updated.first_name.as_deref(), Some("Budi"));
+        assert!(updated.updated_at >= 100);
+
+        // 4. Verify queued campaign recipient display_name immediately updated
+        let r = archive
+            .next_runnable_recipient(campaign_id, 1000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(r.display_name.as_deref(), Some("Budi Santoso"));
+
+        // Verify template interpolation with updated name
+        let rendered = crate::pacing::interpolate_template(
+            "Halo {{name}}, sapaan akrab {first_name}!",
+            r.display_name.as_deref(),
+            &r.phone_number,
+            &r.jid,
+            None,
+        );
+        assert_eq!(rendered, "Halo Budi Santoso, sapaan akrab Budi!");
+
+        // 5. Update non-existent contact by phone number
+        let new_phone = "+1999888777";
+        archive.update_contact_name(new_phone, "Jane Doe").unwrap();
+        let c2 = archive.get_contact(new_phone).unwrap().unwrap();
+        assert_eq!(c2.full_name.as_deref(), Some("Jane Doe"));
+        assert_eq!(c2.first_name.as_deref(), Some("Jane"));
+        assert_eq!(c2.id, "1999888777@s.whatsapp.net");
+
+        // 6. Verify WhatsApp background sync (upsert_contact) does NOT overwrite custom edited name
+        archive
+            .upsert_contact(&Contact {
+                id: jid.to_string(),
+                full_name: Some("Overwritten By WhatsApp".to_string()),
+                first_name: Some("Overwritten".to_string()),
+                push_name: Some("new_push_name".to_string()),
+                phone_number: Some(phone.to_string()),
+                avatar_url: None,
+                updated_at: 5000,
+            })
+            .unwrap();
+
+        let preserved = archive.get_contact(jid).unwrap().unwrap();
+        assert_eq!(preserved.full_name.as_deref(), Some("Budi Santoso"));
+        assert_eq!(preserved.first_name.as_deref(), Some("Budi"));
+        assert_eq!(preserved.push_name.as_deref(), Some("new_push_name"));
     }
 }

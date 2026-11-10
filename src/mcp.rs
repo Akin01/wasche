@@ -111,6 +111,25 @@ impl WascheMcpServer {
         String::from_utf8(out).map_err(|e| e.to_string())
     }
 
+    fn bridge_put_json(&self, path: &str, body: &serde_json::Value) -> Result<String, String> {
+        use std::io::Read;
+        let port = self
+            .bridge_port
+            .ok_or_else(|| "Not in bridge mode".to_string())?;
+        let url = format!("http://127.0.0.1:{}{}", port, path);
+        let bytes = serde_json::to_vec(body).map_err(|e| e.to_string())?;
+        let mut resp = ureq::put(&url)
+            .content_type("application/json")
+            .send(bytes.as_slice())
+            .map_err(|e| format!("Daemon communication failed: {}", e))?;
+        let mut out = Vec::new();
+        resp.body_mut()
+            .as_reader()
+            .read_to_end(&mut out)
+            .map_err(|e| e.to_string())?;
+        String::from_utf8(out).map_err(|e| e.to_string())
+    }
+
     fn bridge_post_empty(&self, path: &str) -> Result<String, String> {
         use std::io::Read;
         let port = self
@@ -229,6 +248,16 @@ pub struct ListContactsParams {
     pub account_id: Option<String>,
     #[schemars(description = "Maximum number of contacts to return (default: 50)")]
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct UpdateContactParams {
+    #[schemars(
+        description = "WhatsApp JID (e.g. '123456789@s.whatsapp.net') or phone number (e.g. '+1234567890') of the contact to update."
+    )]
+    pub jid_or_phone: String,
+    #[schemars(description = "Custom display name to assign to this contact.")]
+    pub name: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -1040,6 +1069,36 @@ impl WascheMcpServer {
             .map_err(|e| format!("Database error querying contacts: {}", e))?;
 
         serde_json::to_string_pretty(&contacts).map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Set or update the custom display name of a WhatsApp contact in the archive."
+    )]
+    pub async fn whatsapp_update_contact(
+        &self,
+        Parameters(params): Parameters<UpdateContactParams>,
+    ) -> Result<String, String> {
+        if params.jid_or_phone.trim().is_empty() {
+            return Err("Contact JID or phone number cannot be empty".to_string());
+        }
+        if self.bridge_port.is_some() {
+            let body = serde_json::json!({ "name": params.name });
+            let path = format!(
+                "/api/contacts/{}",
+                crate::web::percent_encode_str(&params.jid_or_phone)
+            );
+            return self.bridge_put_json(&path, &body);
+        }
+        let sidecar = self.sidecar.as_ref().unwrap();
+        sidecar
+            .archive()
+            .update_contact_name(&params.jid_or_phone, &params.name)
+            .map_err(|e| format!("Database error updating contact: {}", e))?;
+        Ok(format!(
+            "Successfully updated contact '{}' name to '{}'.",
+            params.jid_or_phone.trim(),
+            params.name.trim()
+        ))
     }
 
     #[tool(

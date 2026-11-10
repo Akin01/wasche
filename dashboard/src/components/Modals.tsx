@@ -42,6 +42,8 @@ export default function Modals() {
         return 'Rename Broadcast Campaign';
       case 'rename_account':
         return 'Rename WhatsApp Account';
+      case 'edit_contact':
+        return 'Edit Contact Name';
       case 'confirm':
         return m.title;
       case 'cut_video':
@@ -72,6 +74,7 @@ export default function Modals() {
       case 'rename_campaign':
       case 'rename_account':
         return 'max-w-sm';
+      case 'edit_contact':
       default:
         return 'max-w-sm';
     }
@@ -149,14 +152,20 @@ export default function Modals() {
               </Show>
 
               <Show
-                when={modal()?.type === 'rename_campaign' || modal()?.type === 'rename_account'}
+                when={
+                  modal()?.type === 'rename_campaign' ||
+                  modal()?.type === 'rename_account' ||
+                  modal()?.type === 'edit_contact'
+                }
               >
                 <RenameModal
                   type={(modal() as any)?.type}
                   targetId={
                     (modal() as any)?.type === 'rename_campaign'
                       ? (modal() as any)?.campaignId
-                      : (modal() as any)?.accountId
+                      : (modal() as any)?.type === 'rename_account'
+                        ? (modal() as any)?.accountId
+                        : (modal() as any)?.jid
                   }
                   initialName={(modal() as any)?.currentName || ''}
                   onClose={handleClose}
