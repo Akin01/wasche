@@ -2,6 +2,7 @@
 name = "wasche"
 version = "0.2.0"
 edition = "2024"
+default-run = "wasche"
 license = "Apache-2.0"
 description = "WhatsApp MCP server and background broadcast scheduler sidecar"
 
